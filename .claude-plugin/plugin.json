@@ -1,0 +1,40 @@
+{
+  "name": "kokpit",
+  "version": "0.3.0",
+  "description": "Pasek nad promptem (kontekst, limity, postęp zadania, zadania w tle, decyzje), handoff do pliku wątku, rejestr decyzji, testy i Probierz w tle, skille warsztatowe.",
+  "author": {
+    "name": "Patryk Bożek"
+  },
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "handoffMode": {
+      "type": "string",
+      "title": "Tryb handoffu",
+      "description": "przycisk = tylko pasek z przyciskiem; przerwa = sam, na końcu tury bez zadania w toku albo po ukończonym zadaniu; auto = sam, na końcu pierwszej tury po progu.",
+      "options": [
+        "przerwa",
+        "przycisk",
+        "auto"
+      ],
+      "default": "przerwa"
+    },
+    "handoffTokens": {
+      "type": "number",
+      "title": "Próg handoffu (tokeny kontekstu)",
+      "description": "Od ilu tokenów kontekstu handoff jest proponowany albo robiony. Nigdy później niż przy 75% okna modelu.",
+      "default": 150000
+    },
+    "taskNudge": {
+      "type": "boolean",
+      "title": "Proś Claude o listę zadań",
+      "description": "Dodaje do promptu systemowego krótką prośbę o zakładanie listy zadań przy pracy wieloetapowej, żeby pasek mógł pokazać postęp.",
+      "default": true
+    },
+    "decisionsFile": {
+      "type": "string",
+      "title": "Plik rejestru decyzji",
+      "description": "Ścieżka względem projektu, do której Claude dopisuje decyzje do potwierdzenia, a panel /decyzje zapisuje rozstrzygnięcia.",
+      "default": "docs/decyzje.md"
+    }
+  }
+}

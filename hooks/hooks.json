@@ -1,0 +1,4 @@
+{
+  "description": "Kokpit: pasek nad promptem i przycisk Handoff",
+  "modules": ["./register.tsx"]
+}

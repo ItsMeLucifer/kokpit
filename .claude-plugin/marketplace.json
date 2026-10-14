@@ -1,0 +1,14 @@
+{
+  "name": "kokpit",
+  "description": "Prywatne mody Patryka do Claude Code",
+  "owner": {
+    "name": "Patryk Bożek"
+  },
+  "plugins": [
+    {
+      "name": "kokpit",
+      "source": "./",
+      "description": "Pasek nad promptem (kontekst, limity, postęp, zadania w tle, decyzje), handoff do pliku wątku, rejestr decyzji, testy i Probierz w tle, skille warsztatowe."
+    }
+  ]
+}
