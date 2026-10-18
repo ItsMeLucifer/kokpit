@@ -1,0 +1,5 @@
+# Wtyczki Claude Code instalowane przez `zestaw.sh maszyna`: <id> <źródło marketplace>.
+# KOKPIT = folder tego repozytorium (marketplace z katalogu: po zmianie plików wystarczy /reload-plugins).
+kokpit@kokpit KOKPIT
+andrej-karpathy-skills@karpathy-skills forrestchang/andrej-karpathy-skills
+swift-lsp@claude-plugins-official anthropics/claude-plugins-official

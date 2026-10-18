@@ -17,16 +17,20 @@ if [ -n "$WANT" ]; then
   if [ -f "$WANT" ]; then FILE="$WANT"
   elif [ -f "$DIR/$WANT" ]; then FILE="$DIR/$WANT"
   elif [ -f "$DIR/$WANT.md" ]; then FILE="$DIR/$WANT.md"
-  else FILE=$(grep -l -m1 "^sessions:.*$WANT" "$DIR"/*.md 2>/dev/null | head -1)
+  else FILE=$(grep -l -m1 "^sessions:.*$WANT" "$DIR"/*.md 2>/dev/null | grep -v '\.archiwum\.md$' | head -1)
   fi
+  # Archiwum wątkiem nie jest (stary Kokpit podawał je jako ostatnio zapisany plik): wznów sam wątek.
+  case "$FILE" in
+    *.archiwum.md) [ -f "${FILE%.archiwum.md}.md" ] && FILE="${FILE%.archiwum.md}.md" || FILE="" ;;
+  esac
 fi
 if [ -z "$FILE" ]; then
-  NAME=$(ls -1t "$DIR" 2>/dev/null | grep '\.md$' | head -1)
+  NAME=$(ls -1t "$DIR" 2>/dev/null | grep '\.md$' | grep -v '\.archiwum\.md$' | head -1)
   [ -n "$NAME" ] && FILE="$DIR/$NAME"
 fi
 
 echo "## wątki w projekcie (najnowsze)"
-for f in $(ls -1t "$DIR"/*.md 2>/dev/null | head -8); do
+for f in $(ls -1t "$DIR"/*.md 2>/dev/null | grep -v '\.archiwum\.md$' | head -8); do
   echo "- $(basename "$f"): $(grep -m1 '^# ' "$f" | sed 's/^# //')"
 done
 echo
@@ -36,6 +40,10 @@ if [ -z "$FILE" ]; then
   exit 0
 fi
 echo "WYBRANY WĄTEK: $FILE"
+ARCHIVE="${FILE%.md}.archiwum.md"
+if [ -f "$ARCHIVE" ]; then
+  echo "archiwum wątku: $ARCHIVE ($(wc -c <"$ARCHIVE" | tr -d ' ') B) — otwórz tylko, gdy czegoś brakuje"
+fi
 
 # Przypięcie sesji do wątku — wtedy /handoff w tej sesji dopisze do tego samego pliku.
 if [ -n "$CURRENT" ] && ! grep -q "^sessions:.*$CURRENT" "$FILE"; then

@@ -1,0 +1,23 @@
+{
+  "_opis": "Ustawienia Claude Code dokładane do ~/.claude/settings.json przez `zestaw.sh maszyna`: brakujące klucze dopisuje, różne tylko zgłasza (--nadpisz zastępuje). Bez uprawnień (permissions) — tryb uprawnień ustawiasz na każdej maszynie świadomie.",
+  "model": "opus",
+  "alwaysThinkingEnabled": true,
+  "effortLevel": "xhigh",
+  "modelSettings": {
+    "claude-opus-5": { "effortLevel": "medium" },
+    "claude-opus-5-5": { "effortLevel": "high" }
+  },
+  "tui": "fullscreen",
+  "remoteControlAtStartup": true,
+  "agentPushNotifEnabled": false,
+  "skipWorkflowUsageWarning": true,
+  "pluginConfigs": {
+    "kokpit@kokpit": {
+      "options": {
+        "handoffMode": "przerwa",
+        "handoffTokens": 200000,
+        "taskNudge": true
+      }
+    }
+  }
+}

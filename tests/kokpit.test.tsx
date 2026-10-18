@@ -4,9 +4,11 @@ import type { On } from 'claude-code'
 import {
   addTask,
   bar,
+  busyLabels,
   isBreak,
   isDue,
   isHandoffPath,
+  isThreadFile,
   pickSaved,
   progress,
   resetLabel,
@@ -36,6 +38,7 @@ const H0 = {
   clearAfter: false,
   planMode: false,
   afterPlan: false,
+  clearWhenIdle: false,
   lastTokens: 0,
 }
 
@@ -109,6 +112,33 @@ test('przerwa: nic w toku albo coś ukończone w tej turze', () => {
   expect(isBreak([], false)).toBe(true)
   expect(isBreak(working, false)).toBe(false)
   expect(isBreak(working, true)).toBe(true)
+})
+
+test('plik archiwum nie jest wątkiem', () => {
+  expect(isThreadFile('watek.md')).toBe(true)
+  expect(isThreadFile('/p/.claude/handoffs/watek.md')).toBe(true)
+  expect(isThreadFile('watek.archiwum.md')).toBe(false)
+  expect(isThreadFile('/p/.claude/handoffs/watek.archiwum.md')).toBe(false)
+  expect(isThreadFile('notatka.txt')).toBe(false)
+})
+
+test('praca w tle: agenty w toku, zadania Kokpitu, komendy bez subagentów', () => {
+  const agents = [
+    { status: 'running', description: 'audyt', type: 'Explore' },
+    { status: 'waiting', description: '', type: 'general-purpose' },
+    { status: 'completed', description: 'stary', type: 'Explore' },
+    { status: 'idle', description: 'kolega', type: 'teammate' },
+  ]
+  const jobs = [
+    { endedAt: null, label: 'testy camp' },
+    { endedAt: 5, label: 'Probierz' },
+  ]
+  const tasks = [
+    { type: 'shell', description: 'npm run build' },
+    { type: 'subagent', description: 'audyt' },
+  ]
+  expect(busyLabels(agents, jobs, tasks)).toEqual(['audyt', 'general-purpose', 'testy camp', 'npm run build'])
+  expect(busyLabels([], [], [])).toEqual([])
 })
 
 test('postęp: ukończone + pół za zadanie w toku', () => {
@@ -438,6 +468,48 @@ for (const surface of SURFACES) {
     expect(ran.map(r => r.command)).not.toContain('clear')
   })
 
+  test(`${surface}: po wynikach agentów wątek jest dopisany i dopiero wtedy /clear`, async ($, on) => {
+    const ran: Ran = []
+    const mem: Record<string, unknown> = {}
+    const clock = engine(on, ran, mem)
+    const files: Record<string, number> = {}
+    threads(on, files)
+    let agents = [{ id: 'a1', description: 'audyt', type: 'Explore', status: 'running' }]
+    on('agent.list', () => ({ value: agents as never }))
+    await $.session.measure(measure(60_000))
+    const ui = await $.ui.mount({ plugin: 'kokpit', surface, component: 'AbovePrompt', props: PROPS })
+
+    // t1: handoff zapisany, klik „Wyczyść i wznów” przy agencie w tle → czeka
+    await $.turn.start({ text: '/kokpit:handoff', turnId: 't1' })
+    await $.skill.prompt({ skill: 'kokpit:handoff', text: '' })
+    files['watek.md'] = Date.parse('2026-10-13T10:00:10Z')
+    await $.turn.complete({ ...TURN_END, turnId: 't1' })
+    await ui.press({ key: 'kokpit-clear-resume' })
+    expect(ran.map(r => r.command)).not.toContain('clear')
+    expect(JSON.stringify(await ui.drawn())).toContain('wyczyszczę po wynikach pracy w tle')
+
+    // t2: agent jeszcze pracuje — nic
+    await $.turn.start({ text: '', turnId: 't2' })
+    await $.turn.complete({ ...TURN_END, turnId: 't2' })
+    await clock.settle()
+    expect(ran).toHaveLength(0)
+
+    // t3: wynik agenta przyszedł, nic już nie pracuje → najpierw dopisanie wątku
+    agents = []
+    await $.turn.start({ text: '', turnId: 't3' })
+    await $.turn.complete({ ...TURN_END, turnId: 't3' })
+    await clock.settle()
+    expect(ran.map(r => r.command)).toEqual(['kokpit:handoff'])
+
+    // t4: wątek dopisany → /clear i wznowienie
+    await $.turn.start({ text: '', turnId: 't4' })
+    files['watek.md'] = Date.parse('2026-10-13T10:00:30Z')
+    await $.turn.complete({ ...TURN_END, turnId: 't4' })
+    await clock.settle()
+    expect(ran.map(r => r.command)).toEqual(['kokpit:handoff', 'clear'])
+    expect(mem.pendingResume).toBe('.claude/handoffs/watek.md')
+  })
+
   test(`${surface}: „Później” odkłada o 30k tokenów`, async ($, on) => {
     engine(on, [])
     await $.session.measure(measure(155_000))
@@ -446,6 +518,34 @@ for (const surface of SURFACES) {
     expect(await ui.find({ key: 'kokpit-handoff' })).toBeUndefined()
     await $.session.measure(measure(186_000))
     expect(await ui.find({ key: 'kokpit-handoff' })).toBeDefined()
+  })
+
+  test(`${surface}: zapis archiwum wątku nie udaje zapisu wątku`, async ($, on) => {
+    const ran: Ran = []
+    engine(on, ran)
+    const files: Record<string, number> = { 'watek.md': Date.parse('2026-10-13T09:00:00Z') }
+    threads(on, files)
+    await $.session.measure(measure(60_000))
+    const ui = await $.ui.mount({ plugin: 'kokpit', surface, component: 'AbovePrompt', props: PROPS })
+
+    // t1: handoff dopisał tylko archiwum (Write wprost i plik na dysku) — wątek nie zapisany
+    await $.turn.start({ text: '/kokpit:handoff', turnId: 't1' })
+    await $.skill.prompt({ skill: 'kokpit:handoff', text: '' })
+    await $.tool.call({ tool: 'Write', file_path: '/p/.claude/handoffs/watek.archiwum.md', content: '# A' })
+    files['watek.archiwum.md'] = Date.parse('2026-10-13T10:00:10Z')
+    expect(await ui.find({ key: 'kokpit-clear-resume' })).toBeUndefined()
+    await $.turn.complete({ ...TURN_END, turnId: 't1' })
+    expect(await ui.find({ key: 'kokpit-clear-resume' })).toBeUndefined()
+
+    // t2: archiwum i wątek zapisane — gotowy jest wątek, nie archiwum
+    await $.turn.start({ text: '/kokpit:handoff', turnId: 't2' })
+    await $.skill.prompt({ skill: 'kokpit:handoff', text: '' })
+    files['watek.md'] = Date.parse('2026-10-13T10:00:20Z')
+    files['watek.archiwum.md'] = Date.parse('2026-10-13T10:00:25Z')
+    await $.turn.complete({ ...TURN_END, turnId: 't2' })
+    const drawn = JSON.stringify(await ui.drawn())
+    expect(drawn).toContain('✓ Wątek „watek” zapisany')
+    expect(drawn).not.toContain('watek.archiwum')
   })
 
   test(`${surface}: zapis wątku bez trwającego handoffu nie udaje handoffu`, async ($, on) => {

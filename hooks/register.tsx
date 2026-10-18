@@ -16,7 +16,19 @@ const usageAtom = atom({ plugin: 'kokpit', key: 'usage' } as const, null)
 const tasksAtom = atom({ plugin: 'kokpit', key: 'tasks' } as const, [])
 const handoffAtom = atom(
   { plugin: 'kokpit', key: 'handoff' } as const,
-  { snoozedUntil: 0, savedPath: null, running: false, startedAt: 0, savedTurnId: null, stale: false, clearAfter: false, lastTokens: 0 },
+  {
+    snoozedUntil: 0,
+    savedPath: null,
+    running: false,
+    startedAt: 0,
+    savedTurnId: null,
+    stale: false,
+    clearAfter: false,
+    planMode: false,
+    afterPlan: false,
+    clearWhenIdle: false,
+    lastTokens: 0,
+  },
 )
 const resumableAtom = atom({ plugin: 'kokpit', key: 'resumable' } as const, null)
 const jobsAtom = atom({ plugin: 'kokpit', key: 'jobs' } as const, [])
@@ -62,6 +74,31 @@ function decisionsNote(file: string, next: string): string {
 const COMPACT_NOTE =
   'Kokpit: jeśli rozmowa ma plik wątku w .claude/handoffs/, wskaż jego ścieżkę w streszczeniu. ' +
   'Decyzje użytkownika, odrzucone podejścia i jego uwagi/korekty przenieś dosłownie, nie streszczaj ich.'
+
+/** Tekst zamiast skilla /handoff w trybie planowania (zapis plików jest wtedy zablokowany). */
+const PLAN_NOTE =
+  'Kokpit: sesja jest w trybie planowania, więc handoff jest odłożony — ruszy sam po wyjściu z trybu planowania. ' +
+  'Nie zapisuj stanu sesji nigdzie (także nie do pliku planu). Powiedz to jednym zdaniem i wróć do pracy.'
+
+/** Statusy agenta, przy których jego wynik dopiero przyjdzie do tej sesji. */
+const AGENT_BUSY = ['pending', 'running', 'waiting']
+
+/**
+ * Co w tle tej sesji jeszcze pracuje: agenty, zadania Kokpitu, komendy w tle z ostatniego Stop.
+ * Ich wyniki przychodzą tylko do tej rozmowy — /clear przed nimi by je zgubił.
+ */
+export function busyLabels(
+  agents: { status: string; description: string; type: string }[],
+  jobs: { endedAt: number | null; label: string }[],
+  tasks: { type: string; description: string }[],
+): string[] {
+  return [
+    ...agents.filter(a => AGENT_BUSY.includes(a.status)).map(a => a.description || a.type),
+    ...jobs.filter(j => j.endedAt === null).map(j => j.label),
+    // Subagenty są już w liście agentów.
+    ...tasks.filter(t => t.type !== 'subagent').map(t => t.description || t.type),
+  ]
+}
 
 /** Odczyt z session.measure albo $.session.usage() w jeden kształt. */
 export function toUsage(u: {
@@ -127,6 +164,14 @@ export function isHandoffPath(path: string, cwd: string): boolean {
   return name.endsWith('.md') && !name.includes('/')
 }
 
+/** Plik archiwum wątku (Archiwum i starsze wpisy Dziennika) — leży obok wątku, ale wątkiem nie jest. */
+export const ARCHIVE_SUFFIX = '.archiwum.md'
+
+/** Czy nazwa (albo ścieżka) to plik wątku, a nie jego archiwum. */
+export function isThreadFile(name: string): boolean {
+  return name.endsWith('.md') && !name.endsWith(ARCHIVE_SUFFIX)
+}
+
 /** Nazwa wątku z jego ścieżki. */
 export function threadName(path: string): string {
   return (path.split('/').pop() ?? path).replace(/\.md$/, '')
@@ -184,6 +229,18 @@ let completedThisTurn = false
 let currentTurnId = ''
 let pendingMode: Mode = 'przycisk'
 let pendingTokens = 0
+/** Komendy i inne zadania w tle z ostatniego classic.Stop (silnik podaje je tylko tam). */
+let lastBackground: { type: string; description: string }[] = []
+
+async function backgroundWork($: EngineInterface): Promise<string[]> {
+  let agents: { status: string; description: string; type: string }[] = []
+  try {
+    agents = await $.agent.list()
+  } catch {
+    // Bez listy agentów liczą się zadania Kokpitu i komendy w tle.
+  }
+  return busyLabels(agents, await read($, jobsAtom), lastBackground)
+}
 
 /** Uruchamia skill z pluginu; goła nazwa działa, gdy nic innego jej nie zajmuje. */
 async function runSkill($: EngineInterface, name: string, args: string): Promise<void> {
@@ -232,7 +289,14 @@ async function noteSaved($: EngineInterface, path: string): Promise<void> {
 
 /** /clear i wznowienie wątku w nowej sesji (przez $.store, bo /clear kończy tę sesję). */
 async function clearAndResume($: EngineInterface, path: string): Promise<void> {
-  await update($, handoffAtom, h => ({ ...h, clearAfter: false }))
+  // Praca w tle tej sesji oddałaby wynik do rozmowy, której już nie ma: czekamy na nią (turn.complete).
+  const busy = await backgroundWork($)
+  if (busy.length > 0) {
+    await update($, handoffAtom, h => ({ ...h, clearAfter: false, clearWhenIdle: true }))
+    $.ui.toast(`W tle pracuje jeszcze: ${busy.join(', ')}. Wyczyszczę po ich wynikach, najpierw dopiszę je do wątku.`)
+    return
+  }
+  await update($, handoffAtom, h => ({ ...h, clearAfter: false, clearWhenIdle: false }))
   await $.store.set('pendingResume', path)
   try {
     await $.command.run({ command: 'clear', args: '' })
@@ -251,7 +315,7 @@ async function findResumable($: EngineInterface): Promise<string | null> {
   if (!(await $.fs.exists(HANDOFF_DIR))) return null
   let best: { path: string; at: number } | null = null
   for (const entry of await $.fs.list(HANDOFF_DIR)) {
-    if (entry.kind !== 'file' || !entry.name.endsWith('.md')) continue
+    if (entry.kind !== 'file' || !isThreadFile(entry.name)) continue
     const path = HANDOFF_DIR + '/' + entry.name
     const stat = await $.fs.stat(path)
     if (best === null || stat.mtimeMs > best.at) best = { path, at: stat.mtimeMs }
@@ -280,7 +344,7 @@ async function finishHandoff($: EngineInterface, aborted: boolean): Promise<void
   try {
     if (await $.fs.exists(HANDOFF_DIR)) {
       for (const entry of await $.fs.list(HANDOFF_DIR)) {
-        if (entry.kind !== 'file' || !entry.name.endsWith('.md')) continue
+        if (entry.kind !== 'file' || !isThreadFile(entry.name)) continue
         const path = HANDOFF_DIR + '/' + entry.name
         files.push({ path, mtimeMs: (await $.fs.stat(path)).mtimeMs })
       }
@@ -598,9 +662,14 @@ export const register: Register = (on, options) => {
   }).catch(($, e, next) => next(e))
 
   // /handoff wpisany ręcznie albo wywołany przez Claude też liczy się jako „piszę”.
+  // W trybie planowania zapis wątku jest zablokowany: zamiast skilla notka, a handoff wraca po wyjściu.
   on('skill.prompt', async ($, e, next) => {
     if (e.skill === 'kokpit:handoff' || e.skill === 'handoff') {
       const h = await read($, handoffAtom)
+      if (h.planMode) {
+        await update($, handoffAtom, x => ({ ...x, running: false, afterPlan: true }))
+        return { text: PLAN_NOTE }
+      }
       if (!h.running) {
         const now = await $.clock.now()
         pendingTokens = (await read($, usageAtom))?.contextTokens ?? 0
@@ -612,6 +681,21 @@ export const register: Register = (on, options) => {
 
   on('prompt.submit', async ($, e, next) => {
     await update($, resumableAtom, () => null)
+    return next(e)
+  }).catch(($, e, next) => next(e))
+
+  // Tryb planowania głównej pętli: przypomnienie idzie z każdym zapytaniem, wyjście raz.
+  on('prompt.attachment', { type: ['plan_mode', 'plan_mode_reentry', 'plan_mode_exit'] }, async ($, e, next) => {
+    if (!e.agentId) {
+      const planMode = e.type !== 'plan_mode_exit'
+      if ((await read($, handoffAtom)).planMode !== planMode) await update($, handoffAtom, h => ({ ...h, planMode }))
+    }
+    return next(e)
+  }).catch(($, e, next) => next(e))
+
+  // Komendy i inne zadania w tle silnik podaje tylko przy Stop — zapamiętaj je do decyzji o /clear.
+  on('classic.Stop', async ($, e, next) => {
+    lastBackground = (e.background_tasks ?? []).map(t => ({ type: t.type, description: t.description }))
     return next(e)
   }).catch(($, e, next) => next(e))
 
@@ -639,7 +723,24 @@ export const register: Register = (on, options) => {
     }
     if (wasRunning) return r
     if (h.savedPath && !h.stale) await update($, handoffAtom, x => ({ ...x, stale: true }))
-    if (e.isAborted || mode === 'przycisk') return r
+    // W trybie planowania nic nie piszemy; handoff i /clear czekają.
+    if (h.planMode) return r
+    // „Wyczyść i wznów” czekało na pracę w tle: gdy skończona, jej wyniki są już w rozmowie — dopisz i czyść.
+    if (h.clearWhenIdle) {
+      if (h.savedPath && (await backgroundWork($)).length === 0) {
+        await update($, handoffAtom, x => ({ ...x, clearWhenIdle: false }))
+        $.clock.after(0, () => refreshThenClear($))
+      }
+      return r
+    }
+    if (e.isAborted) return r
+    // Handoff poproszony w trybie planowania rusza na końcu pierwszej tury po wyjściu z niego.
+    if (h.afterPlan) {
+      await update($, handoffAtom, x => ({ ...x, afterPlan: false }))
+      $.clock.after(0, () => startHandoff($, 'przycisk'))
+      return r
+    }
+    if (mode === 'przycisk') return r
     const usage = await read($, usageAtom)
     if (!usage || !isDue(usage.contextTokens, thresholdFor(tokensSetting, usage.contextWindow), await read($, handoffAtom))) {
       return r
@@ -693,7 +794,7 @@ export const register: Register = (on, options) => {
     if (r.isError || (e.tool !== 'Write' && e.tool !== 'Edit')) return r
     const path = e.file_path.startsWith('/') ? e.file_path : (await $.session.cwd()).replace(/\/+$/, '') + '/' + e.file_path
     if (path.endsWith('/' + decisionsFile) || path === decisionsFile) await refreshDecisions($, decisionsFile)
-    if (path.includes('/' + HANDOFF_DIR + '/') && !path.includes('/.poprzednie/') && path.endsWith('.md')) {
+    if (path.includes('/' + HANDOFF_DIR + '/') && !path.includes('/.poprzednie/') && isThreadFile(path)) {
       // Edycje wątku poza handoffem (np. ręczna poprawka) nie udają zakończonego handoffu.
       if ((await read($, handoffAtom)).running) await noteSaved($, path)
     }
@@ -889,7 +990,9 @@ export const register: Register = (on, options) => {
       const path = handoff.savedPath
       action = (
         <Box flexDirection="row" columnGap={2}>
-          {handoff.stale ? (
+          {handoff.clearWhenIdle ? (
+            <Text color="yellow">{`⏳ Wątek „${threadName(path)}” zapisany — wyczyszczę po wynikach pracy w tle`}</Text>
+          ) : handoff.stale ? (
             <Text color="yellow">{`⚠ Wątek „${threadName(path)}” zapisany wcześniej — rozmowa poszła dalej`}</Text>
           ) : (
             <Text color="green">{`✓ Wątek „${threadName(path)}” zapisany`}</Text>
@@ -904,12 +1007,14 @@ export const register: Register = (on, options) => {
             key="kokpit-stay"
             label="Zostań tutaj"
             plain
-            onPress={() => update($, handoffAtom, h => ({ ...h, savedPath: null }))}
+            onPress={() => update($, handoffAtom, h => ({ ...h, savedPath: null, clearWhenIdle: false }))}
           />
         </Box>
       )
     } else if (handoff.running) {
       action = <Text color="yellow">{`… Piszę handoff do ${HANDOFF_DIR}/`}</Text>
+    } else if (handoff.planMode && (handoff.afterPlan || isDue(tokens, threshold, handoff))) {
+      action = <Text color={tone(ctx)}>{`⏸ Kontekst ${k(tokens)} — handoff po wyjściu z trybu planowania.`}</Text>
     } else if (isDue(tokens, threshold, handoff)) {
       const why =
         mode === 'przycisk'

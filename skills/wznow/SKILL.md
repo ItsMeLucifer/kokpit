@@ -17,7 +17,7 @@ Skrypt już przypiął tę sesję do wybranego wątku (`sessions:`), więc `/han
 
 ## Kroki
 
-1. **Przeczytaj plik wątku w całości.** Najważniejsze: Następne kroki, Decyzje, Próbowaliśmy i odpadło, Uwagi użytkownika i pułapki. Dziennik i Archiwum — tylko gdy czegoś brakuje.
+1. **Przeczytaj plik wątku w całości** (sam wątek, bez pliku archiwum). Najważniejsze: Następne kroki, Decyzje, Próbowaliśmy i odpadło, Uwagi użytkownika i pułapki. Plik archiwum `<wątek>.archiwum.md` (nieaktualne punkty, starsze wpisy Dziennika) otwórz tylko, gdy czegoś brakuje albo plan dotyka sprawy, którą wątek odsyła do archiwum.
 2. **Sprawdź, czy jest aktualny.** Porównaj „Stan teraz” z tym, co pokazał skrypt (commity i zmiany od `updated`). Jeśli coś się rozjechało — powiedz co, w jednym zdaniu.
 3. **Przeczytaj pliki z „Szybkiego startu”** w podanej kolejności. Nie czytaj na zapas całego repozytorium.
 4. **Zgłoś się krótko** (do 6 linii): wątek, cel, stan w jednym zdaniu, otwarte pytania do użytkownika (jeśli są), krok 1.
