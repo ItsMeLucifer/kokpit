@@ -13,13 +13,21 @@ echo "sesja: $SESSION"
 # Wątek tej sesji = plik, którego frontmatter `sessions:` wymienia tę sesję.
 THREAD=""
 if [ -d "$DIR" ]; then
-  THREAD=$(grep -l -m1 "^sessions:.*$SESSION" "$DIR"/*.md 2>/dev/null | head -1)
+  THREAD=$(grep -l -m1 "^sessions:.*$SESSION" "$DIR"/*.md 2>/dev/null | grep -v '\.archiwum\.md$' | head -1)
 fi
 if [ -n "$THREAD" ]; then
   echo "WĄTEK TEJ SESJI: $THREAD"
   mkdir -p "$DIR/.poprzednie" 2>/dev/null
   PREV="$DIR/.poprzednie/$(basename "$THREAD")"
   cp "$THREAD" "$PREV" 2>/dev/null && echo "kopia poprzedniej wersji (do walidatora): $PREV"
+  # Archiwum wątku: tylko dopisywane; kopia obok, żeby walidator sprawdził, że nic z niego nie zniknęło.
+  ARCHIVE="${THREAD%.md}.archiwum.md"
+  if [ -f "$ARCHIVE" ]; then
+    cp "$ARCHIVE" "$DIR/.poprzednie/$(basename "$ARCHIVE")" 2>/dev/null
+    echo "ARCHIWUM WĄTKU: $ARCHIVE ($(wc -c <"$ARCHIVE" | tr -d ' ') B; dopisujesz na końcu sekcji, nie czytasz całego)"
+  else
+    echo "ARCHIWUM WĄTKU: brak (założysz $ARCHIVE, gdy będzie co przenieść)"
+  fi
 else
   echo "WĄTEK TEJ SESJI: brak — wybierz istniejący wątek z listy niżej albo załóż nowy"
 fi
@@ -49,7 +57,7 @@ fi
 echo
 echo "## wątki w projekcie (najnowsze; tytuł z pierwszego nagłówka)"
 if [ -d "$DIR" ]; then
-  for f in $(ls -1t "$DIR"/*.md 2>/dev/null | head -8); do
+  for f in $(ls -1t "$DIR"/*.md 2>/dev/null | grep -v '\.archiwum\.md$' | head -8); do
     echo "- $(basename "$f"): $(grep -m1 '^# ' "$f" | sed 's/^# //')"
   done
 fi

@@ -6,6 +6,10 @@
 Kod 1 = błąd do poprawienia: brak sekcji, zostawiony placeholder, możliwy sekret,
 albo punkt sekcji chronionej, który był w poprzedniej wersji i zniknął.
 Kod 0 = w porządku (ostrzeżenia tylko wypisuje).
+
+Obok wątku <wątek>.md może leżeć <wątek>.archiwum.md: Archiwum i starsze wpisy Dziennika,
+tylko dopisywane. Punkt przeniesiony tam liczy się jako zachowany; punkt, który był w
+poprzedniej wersji archiwum (kopia w .poprzednie/), nie może z niego zniknąć.
 """
 import re
 import sys
@@ -47,7 +51,11 @@ PLACEHOLDERS = [
     r"^\s*(?:[-*]|\d+[.)])?\s*(?:[\w ]+:\s*)?<[^>\n]{3,}>",
 ]
 
-DIARY_LIMIT = 15
+# Tyle ostatnich wpisów Dziennika zostaje w pliku wątku; starsze idą słowo w słowo do archiwum.
+DIARY_KEEP = 8
+# Powyżej tego plik wątku (czytany w całości przy /wznow i przy handoffie) warto odchudzić.
+SIZE_WARN = 20_000
+ARCHIVE_SUFFIX = ".archiwum.md"
 
 
 def section(text: str, heading: str) -> str:
@@ -68,6 +76,12 @@ def norm(s: str) -> str:
     return re.sub(r"\s+", " ", s).strip().lower()
 
 
+def archive_of(path: Path) -> Path:
+    """<wątek>.md → <wątek>.archiwum.md w tym samym katalogu."""
+    return path.with_name(path.name[: -len(".md")] + ARCHIVE_SUFFIX)
+
+
+
 def main(argv: list[str]) -> int:
     args = [a for a in argv if a != "--previous"]
     prev_path = None
@@ -83,7 +97,12 @@ def main(argv: list[str]) -> int:
     if not path.is_file():
         print(f"BŁĄD: nie ma pliku {path}")
         return 1
+    if path.name.endswith(ARCHIVE_SUFFIX):
+        print(f"BŁĄD: {path.name} to archiwum wątku — sprawdzaj plik wątku (bez „.archiwum”)")
+        return 1
     text = path.read_text(encoding="utf-8")
+    archive = archive_of(path)
+    archive_text = archive.read_text(encoding="utf-8") if archive.is_file() else ""
     errors, warnings = [], []
 
     head = text.split("\n---", 2)[0] if text.startswith("---") else ""
@@ -104,21 +123,31 @@ def main(argv: list[str]) -> int:
                 errors.append(f"zostawiony placeholder: {line.strip()[:80]}")
                 break
     for pat, name in SECRETS:
-        if re.search(pat, text):
+        if re.search(pat, text) or re.search(pat, archive_text):
             errors.append(f"możliwy sekret ({name}) — zamaskuj go")
 
     if prev_path and prev_path.is_file():
         prev = prev_path.read_text(encoding="utf-8")
-        whole = norm(text)
+        whole = norm(text + "\n" + archive_text)
         for h in PROTECTED:
             for b in bullets(section(prev, h)):
                 if norm(b) not in whole:
-                    errors.append(f"z „{h}” zniknął punkt: „{b[:90]}” — przywróć go albo przenieś do „## Archiwum” z powodem")
+                    errors.append(
+                        f"z „{h}” zniknął punkt: „{b[:90]}” — przywróć go albo przenieś do „## Archiwum” "
+                        f"w {archive.name} z powodem"
+                    )
         old_diary = bullets(section(prev, "## Dziennik"))
-        new_diary = norm(section(text, "## Dziennik") + " " + section(text, "## Archiwum"))
+        new_diary = norm(section(text, "## Dziennik") + " " + section(text, "## Archiwum") + " " + archive_text)
         lost = [d for d in old_diary if norm(d) not in new_diary]
         if lost and "wcześniej" not in new_diary:
-            errors.append(f"z „Dziennika” zniknęło {len(lost)} wpisów bez zwinięcia do „Wcześniej:”")
+            errors.append(f"z „Dziennika” zniknęło {len(lost)} wpisów — przenieś je słowo w słowo do {archive.name}")
+        # Archiwum tylko rośnie: wszystko, co było w nim poprzednio, musi w nim zostać.
+        prev_archive = archive_of(prev_path)
+        if prev_archive.is_file():
+            current = norm(archive_text)
+            for b in bullets(prev_archive.read_text(encoding="utf-8")):
+                if norm(b) not in current:
+                    errors.append(f"z {archive.name} zniknął punkt: „{b[:90]}” — archiwum się tylko dopisuje")
 
     steps = section(text, "## Następne kroki")
     if steps and not re.search(r"^\s*1[.)]", steps, re.M):
@@ -130,8 +159,24 @@ def main(argv: list[str]) -> int:
     if words > 1000:
         warnings.append(f"sekcje streszczane mają {words} słów — skróć (linkuj zamiast przepisywać)")
     diary = bullets(section(text, "## Dziennik"))
-    if len(diary) > DIARY_LIMIT:
-        warnings.append(f"„Dziennik” ma {len(diary)} wpisów — zwiń najstarsze do jednego punktu „Wcześniej: …”")
+    if len(diary) > DIARY_KEEP:
+        warnings.append(
+            f"„Dziennik” ma {len(diary)} wpisów — starsze niż ostatnie {DIARY_KEEP} przenieś słowo w słowo "
+            f"do „## Dziennik (starsze)” w {archive.name}"
+        )
+    archived_here = [b for b in bullets(section(text, "## Archiwum")) if ARCHIVE_SUFFIX not in b]
+    if archived_here:
+        warnings.append(f"„## Archiwum” ma {len(archived_here)} punktów w pliku wątku — przenieś je słowo w słowo do {archive.name}")
+    size = len(text.encode("utf-8"))
+    if size > SIZE_WARN:
+        if archived_here or len(diary) > DIARY_KEEP:
+            hint = f"przenieś Archiwum i starsze wpisy Dziennika do {archive.name}"
+        else:
+            hint = (
+                "skróć sekcje streszczane (linkuj zamiast przepisywać), punkty chronione, które już nie obowiązują, "
+                f"przenieś do {archive.name}, a trwałe ustalenia — do dokumentów projektu (w wątku zostaw odnośnik)"
+            )
+        warnings.append(f"plik wątku ma {size // 1024} KB (czytany w całości przy /wznow) — {hint}")
 
     for w in warnings:
         print("UWAGA:", w)

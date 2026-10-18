@@ -32,6 +32,8 @@ export type Handoff = {
   planMode: boolean
   /** Handoff poproszony w trybie planowania — czeka na wyjście z niego. */
   afterPlan: boolean
+  /** „Wyczyść i wznów” przy pracy w tle (agenty, zadania) — /clear po ich wynikach, wątek najpierw dopisany. */
+  clearWhenIdle: boolean
   /** Przy ilu tokenach był ostatni handoff w tej sesji (0 = jeszcze nie było). */
   lastTokens: number
 }

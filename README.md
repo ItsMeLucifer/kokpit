@@ -28,15 +28,16 @@ Zawsze możesz kliknąć **Teraz** albo **Później** (odkłada o 30k tokenów).
 
 **Dlaczego nic nie ginie.**
 - Sekcje **Decyzje**, **Próbowaliśmy i odpadło** i **Uwagi użytkownika i pułapki** tylko rosną: stare punkty zostają słowo w słowo, nieaktualne idą do **Archiwum** z dopiskiem, czym je zastąpiono.
-- Przed zapisem skrypt robi kopię poprzedniej wersji, a walidator porównuje: punkt chroniony, który zniknął bez śladu, to błąd do poprawienia.
+- **Archiwum** i wpisy Dziennika starsze niż ostatnie 8 leżą w osobnym pliku `<wątek>.archiwum.md` (tylko dopisywanym), żeby plik wątku, czytany w całości przy każdym `/wznow`, nie puchł. `/wznow` otwiera archiwum tylko wtedy, gdy czegoś brakuje.
+- Przed zapisem skrypt robi kopię poprzedniej wersji wątku i archiwum, a walidator porównuje: punkt chroniony, który zniknął bez śladu (ani w wątku, ani w archiwum), albo punkt, który wypadł z archiwum, to błąd do poprawienia. Powyżej 20 KB walidator radzi odchudzenie.
 - Streszczane są tylko sekcje bieżące: Cel, Stan teraz, Dowody i liczby, Otwarte pytania, Następne kroki, Szybki start.
-- **Dziennik** dostaje jeden wpis na handoff; po 15 wpisach najstarsze zwijają się w „Wcześniej: …”.
+- **Dziennik** dostaje jeden wpis na handoff. Handoff zapisuje wątek edycjami (dopisuje i podmienia sekcje), nie przepisuje go w całości.
 
 **Co dalej.** Po zapisie pasek proponuje **Wyczyść i wznów**: Kokpit robi `/clear`, a w nowej sesji sam uruchamia `/wznow` tego wątku. Gdyby silnik nie pozwolił modowi wywołać `/clear`, wpisz je sam — wznowienie i tak ruszy. **Zostań tutaj** zostawia sesję bez zmian.
 
 Jeśli po zapisie rozmowa poszła dalej, pasek pokazuje ⚠ i przycisk **Dopisz, wyczyść i wznów**: najpierw handoff dopisuje to, co doszło, a `/clear` idzie dopiero po udanym zapisie (nieudany albo przerwany handoff niczego nie czyści). Ręczne `/clear` w takim stanie też najpierw dopisuje; żeby wyczyścić bez zapisu, kliknij **Zostań tutaj**, potem `/clear`.
 
-**Tryb planowania i praca w tle.** W trybie planowania handoff nie rusza (nie da się w nim zapisać wątku): pasek pokazuje „Handoff po wyjściu z trybu planowania”, a ręczne `/kokpit:handoff` zostaje odłożone i wraca po wyjściu z planu. `/clear` z przycisku Kokpitu czeka, dopóki pracują agenty albo zadania w tle tej sesji — ich wyniki przyszłyby tylko do niej.
+**Tryb planowania i praca w tle.** W trybie planowania handoff nie rusza (nie da się w nim zapisać wątku): pasek pokazuje „Handoff po wyjściu z trybu planowania”, a ręczne `/kokpit:handoff` zostaje odłożone i wraca na końcu pierwszej tury po wyjściu z planu. `/clear` z przycisku Kokpitu czeka, dopóki pracują agenty, zadania Kokpitu albo komendy w tle tej sesji — ich wyniki przyszłyby tylko do niej. Pasek pokazuje wtedy „⏳ … wyczyszczę po wynikach pracy w tle”; gdy wszystko skończy, Kokpit dopisuje wyniki do wątku i dopiero potem robi `/clear`. „Zostań tutaj” odwołuje czekanie.
 
 **Siatka bezpieczeństwa.** Gdy mimo wszystko dojdzie do natywnego auto-compactu, Kokpit dokleja mu instrukcję: decyzje, odrzucone podejścia i uwagi przenieść dosłownie, wskazać plik wątku.
 
@@ -87,7 +88,40 @@ Przetłumaczone i dostosowane do Zavishy skille z [mattpocock/skills](https://gi
 
 Zapis i edycja `.claude/handoffs/*.md` są zatwierdzane przez mod automatycznie (tylko pliki `.md` wprost w tym katalogu projektu).
 
+- `/zestaw [maszyna | projekt] [--graphify] [--headroom]` — sprawdza setup tej maszyny i projektu, proponuje komendę, uruchamia ją po Twojej zgodzie. Tylko ręcznie.
+
+## Zestaw (nowa maszyna, nowy projekt)
+
+Ten sam setup na każdym komputerze:
+
+```
+gh auth login                                                   # repo Kokpitu jest prywatne
+gh repo clone ItsMeLucifer/kokpit_claude_mode ~/Projects/kokpit
+~/Projects/kokpit/instaluj.sh                                   # uv, wtyczki, ustawienia Claude Code
+```
+
+Potem w każdym projekcie `/kokpit:zestaw` (sprawdza i proponuje) albo wprost `skills/zestaw/scripts/zestaw.sh projekt <katalog>`.
+
+| Co | Skąd | Jak |
+| --- | --- | --- |
+| uv, claude | — | brak uv → `brew install uv`; brak claude → link do instalacji |
+| Wtyczki | `skills/zestaw/scripts/wtyczki.txt` | dodaje marketplace, instaluje brakujące, włącza wyłączone |
+| Ustawienia Claude Code | `skills/zestaw/scripts/profil.json` | brakujące klucze dopisuje, różne tylko zgłasza (`--nadpisz` zastępuje), przed zapisem kopia `settings.json.kokpit-<data>`; uprawnień nie rusza |
+| Projekt | — | `.gitignore` (kopie walidatora, `.claude/kokpit/`), `.claude/handoffs/`, raport stałego kosztu sesji: CLAUDE.md i duże wątki |
+| graphify (opcja) | `wersje.conf` | `--graphify`; w projekcie tylko przy ≥ 60% kodu w językach, które czyta; graf code-only, bez LLM. W projektach Godota nie pasuje |
+| headroom (opcja) | `wersje.conf` | `--headroom` instaluje; próba tylko w terminalu przez `claude-hr.sh` (karta Code w aplikacji omija proxy, Remote Control nie działa) |
+
+```
+zestaw.sh sprawdz [projekt]                             # niczego nie zmienia
+zestaw.sh maszyna [--graphify] [--headroom] [--nadpisz]
+zestaw.sh projekt [projekt] [--graphify] [--wymus]
+```
+
+Każdy krok jest idempotentny. Dlaczego graphify i headroom są tylko opcjami: `docs/headroom-graphify.md`.
+
 ## Instalacja (Mac)
+
+Najprościej: `./instaluj.sh` (sekcja wyżej). Ręcznie:
 
 1. Plugin leży w `~/Projects/kokpit`.
 2. W terminalu:
