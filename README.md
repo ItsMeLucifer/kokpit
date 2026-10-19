@@ -14,15 +14,15 @@ Zapełnienie kontekstu, limit 5-godzinny i tygodniowy (z godziną resetu) oraz p
 
 ## Handoff
 
-**Kiedy.** Od progu w tokenach (domyślnie 150k, nigdy później niż przy 75% okna modelu). Trzy tryby w `/config` → Kokpit:
+**Kiedy.** Dwa progi w tokenach. **Miękki** (domyślnie 150k, nigdy później niż przy 75% okna): od niego handoff rusza sam, ale tylko po skończonym zadaniu. **Twardy** (domyślnie miękki + 100k, nigdy dalej niż 85% okna): od niego rusza na końcu najbliższej tury, nawet w trakcie pracy, żeby kontekst nie rósł bez końca. Trzy tryby w `/config` → Kokpit:
 
 | Tryb | Co się dzieje po przekroczeniu progu |
 | --- | --- |
-| `przerwa` (domyślny) | Handoff rusza sam na końcu tury, w której nic nie jest w toku albo właśnie ukończyło się zadanie. W połowie roboty czeka. |
+| `przerwa` (domyślny) | Handoff rusza sam na końcu tury, gdy zadanie jest skończone: cała lista zadań odhaczona i tura nie kończy się pytaniem do Ciebie. Od twardego progu — na końcu najbliższej tury. |
 | `przycisk` | Tylko pasek z przyciskiem **Handoff**. |
-| `auto` | Handoff rusza sam na końcu pierwszej tury po progu. |
+| `auto` | Handoff rusza sam na końcu pierwszej tury po progu, która nie kończy się pytaniem. |
 
-Zawsze możesz kliknąć **Teraz** albo **Później** (odkłada o 30k tokenów). Po handoffie kolejny w tej samej sesji dopiero po kolejnych 30k.
+„Skończone” Kokpit czyta z listy zadań: w terminalu z TaskCreate/TodoWrite, w aplikacji desktopowej z jej własnej listy (`update_plan`, `wrap_up`). Pytanie to `wrap_up` z pytaniem albo odpowiedź, której ostatnia linia kończy się „?”. **Najwyżej jeden automatyczny handoff na rozmowę** — praca w tle, która dobija kontekst, nie sypie kolejnymi. Zawsze możesz kliknąć **Teraz** albo **Później** (odkłada o 30k tokenów).
 
 **Gdzie.** Jeden plik na **wątek pracy**, nie na czat: `.claude/handoffs/<wątek>.md` (np. `cutscenka-plauen.md`), ciągnięty przez wszystkie sesje tego tematu. Frontmatter `sessions:` wymienia czaty, które do niego pisały.
 
@@ -33,7 +33,13 @@ Zawsze możesz kliknąć **Teraz** albo **Później** (odkłada o 30k tokenów).
 - Streszczane są tylko sekcje bieżące: Cel, Stan teraz, Dowody i liczby, Otwarte pytania, Następne kroki, Szybki start.
 - **Dziennik** dostaje jeden wpis na handoff. Handoff zapisuje wątek edycjami (dopisuje i podmienia sekcje), nie przepisuje go w całości.
 
-**Co dalej.** Po zapisie pasek proponuje **Wyczyść i wznów**: Kokpit robi `/clear`, a w nowej sesji sam uruchamia `/wznow` tego wątku. Gdyby silnik nie pozwolił modowi wywołać `/clear`, wpisz je sam — wznowienie i tak ruszy. **Zostań tutaj** zostawia sesję bez zmian.
+**Co dalej — bez klikania.** Po zapisie nic się nie czyści: spokojnie czytasz ostatnie odpowiedzi. Gdy coś napiszesz, Kokpit wstrzymuje tę wiadomość, robi `/clear`, w nowej sesji uruchamia `/wznow` tego wątku (który tylko się zgłasza) i wysyła Twoją wiadomość. Wiadomość napisana w trakcie handoffu czeka na jego koniec i idzie tak samo. Polecenia (`/…`), wiadomości z obrazkami i wiadomości przy pracy w tle przechodzą normalnie, bez czyszczenia. Nieudany handoff oddaje wstrzymaną wiadomość tej rozmowie. Aplikacja desktopowa rysuje wstrzymanie jako czerwone „Prompt blocked by a hook” (opis Kokpitu chowa w „View details”). To nie błąd, więc Kokpit pokazuje ten sam opis toastem, a przy dopisywaniu albo kończeniu handoffu trzyma toast 30 s. Ustawienie `handoffClear: przycisk` wraca do samego przycisku.
+
+**Ostatnie odpowiedzi nie giną.** Przed czyszczeniem Kokpit zapisuje dosłownie dwie ostatnie odpowiedzi Claude (bez tur handoffu) do `.claude/kokpit/ostatnie/<wątek>.md`. W nowej sesji otwiera je w panelu **Poprzednie odpowiedzi** (potem przycisk w pasku albo `/poprzednie`), a model dostaje je jako ukryty kontekst przy Twojej wiadomości — „tak” albo „zrób punkt 2” trafia w to, co było napisane.
+
+**Równoległe sesje.** Magazyn Kokpitu jest wspólny dla wszystkich sesji i projektów, więc wstrzymana wiadomość i „wznów ten wątek” leżą pod kluczem okna rozmowy (`pendingPrompt:<id>`): `/clear` w innej sesji, także w innym repo, ich nie przejmie. Most przez `/clear` jest ważny 5 minut, resztki po zamkniętych oknach znikają po godzinie. Pliki Kokpitu (wątki, ostatnie odpowiedzi, logi zadań w tle, ustawienia, rejestr decyzji) liczą się od korzenia projektu, nie od bieżącego katalogu, który `cd` w Bashu przesuwa; zadania w tle też biegną w korzeniu projektu.
+
+Przycisk **Wyczyść i wznów** zostaje do czyszczenia od razu; gdyby silnik nie pozwolił modowi wywołać `/clear`, wpisz je sam — wznowienie i tak ruszy. **Zostań tutaj** zostawia sesję bez zmian i wyłącza czyszczenie przy następnej wiadomości.
 
 Jeśli po zapisie rozmowa poszła dalej, pasek pokazuje ⚠ i przycisk **Dopisz, wyczyść i wznów**: najpierw handoff dopisuje to, co doszło, a `/clear` idzie dopiero po udanym zapisie (nieudany albo przerwany handoff niczego nie czyści). Ręczne `/clear` w takim stanie też najpierw dopisuje; żeby wyczyścić bez zapisu, kliknij **Zostań tutaj**, potem `/clear`.
 
@@ -41,7 +47,14 @@ Jeśli po zapisie rozmowa poszła dalej, pasek pokazuje ⚠ i przycisk **Dopisz,
 
 **Siatka bezpieczeństwa.** Gdy mimo wszystko dojdzie do natywnego auto-compactu, Kokpit dokleja mu instrukcję: decyzje, odrzucone podejścia i uwagi przenieść dosłownie, wskazać plik wątku.
 
-**Statystyki.** `/kokpit` — ile handoffów dziś i w tygodniu, w ilu wątkach, przy ilu tokenach średnio. Po tygodniu widać, czy próg jest dobry.
+**Statystyki.** `/kokpit` — ile handoffów dziś i w tygodniu, w ilu wątkach, przy ilu tokenach średnio, ile automatycznych i ile dopisań przy wiadomości (wątek dopisany przed czyszczeniem, bo rozmowa poszła dalej od zapisu; w dzienniku tryb `dopisanie`). Po tygodniu widać, czy próg jest dobry.
+
+## Narzędzia w tym repo
+
+`/narzedzia` otwiera panel dla bieżącego repo:
+- **Graf kodu (graphify)** — ocena z zestawu (pasuje, gdy co najmniej 60% kodu jest w językach, które graphify czyta; w Godocie nie), przycisk **Zainstaluj** / **Włącz w tym repo** / **Wyłącz w tym repo**. Instalacja i włączanie idą w tle (`zestaw.sh`), postęp w pasku.
+- **Skille widoczne dla modelu** — przy każdym skillu z konta i `~/.claude/skills` przycisk **Ukryj** / **Pokaż**. Ukryty skill (`skillOverrides: "user-invocable-only"` w `.claude/settings.json`) nie zajmuje kontekstu, a `/nazwa` dalej działa. Skille wtyczek tak się nie ukrywają (wyłącza się całą wtyczkę).
+- **Proxy headroom** — tylko informacja: próba w terminalu przez `claude-hr.sh`, bo karta Code w aplikacji je omija.
 
 ## Rejestr decyzji
 
@@ -139,5 +152,5 @@ Do szybkiego testu bez instalacji: `claude --plugin-dir ~/Projects/kokpit`.
 
 ```
 claude plugin validate ~/Projects/kokpit
-cd ~/Projects/kokpit && claude plugin test      # 56 testów: handoff, rejestr, zadania w tle; terminal + desktop
+cd ~/Projects/kokpit && claude plugin test      # 89 testów: handoff, rejestr, zadania w tle; terminal + desktop
 ```

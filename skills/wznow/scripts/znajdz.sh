@@ -4,6 +4,8 @@
 PROJECT="${1:-$PWD}"
 CURRENT="${2:-}"
 WANT="${3:-}"
+# „po-czyszczeniu”: Kokpit wyczyścił rozmowę przy wiadomości użytkownika, która zaraz przyjdzie.
+AFTER_CLEAR="${4:-}"
 DIR="$PROJECT/.claude/handoffs"
 cd "$PROJECT" 2>/dev/null || true
 
@@ -40,6 +42,9 @@ if [ -z "$FILE" ]; then
   exit 0
 fi
 echo "WYBRANY WĄTEK: $FILE"
+if [ "$AFTER_CLEAR" = "po-czyszczeniu" ]; then
+  echo "PO CZYSZCZENIU: wiadomość użytkownika przyjdzie zaraz po Twojej odpowiedzi — zgłoś się krótko, nie zaczynaj kroku 1."
+fi
 ARCHIVE="${FILE%.md}.archiwum.md"
 if [ -f "$ARCHIVE" ]; then
   echo "archiwum wątku: $ARCHIVE ($(wc -c <"$ARCHIVE" | tr -d ' ') B) — otwórz tylko, gdy czegoś brakuje"

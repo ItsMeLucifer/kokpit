@@ -1,6 +1,6 @@
 {
   "name": "kokpit",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Pasek nad promptem (kontekst, limity, postęp zadania, zadania w tle, decyzje), handoff do pliku wątku, rejestr decyzji, testy i Probierz w tle, skille warsztatowe, zestaw do konfiguracji nowej maszyny.",
   "author": {
     "name": "Patryk Bożek"
@@ -10,7 +10,7 @@
     "handoffMode": {
       "type": "string",
       "title": "Tryb handoffu",
-      "description": "przycisk = tylko pasek z przyciskiem; przerwa = sam, na końcu tury bez zadania w toku albo po ukończonym zadaniu; auto = sam, na końcu pierwszej tury po progu.",
+      "description": "przycisk = tylko pasek z przyciskiem; przerwa = sam, na końcu tury po skończonym zadaniu (cała lista odhaczona, bez pytania do Ciebie), a od twardego progu na końcu najbliższej tury; auto = sam, na końcu pierwszej tury po progu, która nie kończy się pytaniem. Zawsze najwyżej jeden automatyczny handoff na rozmowę.",
       "options": [
         "przerwa",
         "przycisk",
@@ -20,9 +20,25 @@
     },
     "handoffTokens": {
       "type": "number",
-      "title": "Próg handoffu (tokeny kontekstu)",
-      "description": "Od ilu tokenów kontekstu handoff jest proponowany albo robiony. Nigdy później niż przy 75% okna modelu.",
+      "title": "Próg handoffu (miękki, tokeny kontekstu)",
+      "description": "Od ilu tokenów kontekstu handoff jest proponowany albo robiony po skończonym zadaniu. Nigdy później niż przy 75% okna modelu.",
       "default": 150000
+    },
+    "handoffHardTokens": {
+      "type": "number",
+      "title": "Twardy próg handoffu (tokeny kontekstu)",
+      "description": "Od ilu tokenów handoff rusza na końcu tury także w trakcie pracy albo przy pytaniu do Ciebie. 0 = miękki próg + 100 000; nigdy dalej niż 85% okna.",
+      "default": 0
+    },
+    "handoffClear": {
+      "type": "string",
+      "title": "Czyszczenie po handoffie",
+      "description": "wiadomosc = po zapisie wątku Twoja następna wiadomość czyści rozmowę, wznawia wątek i idzie do nowej sesji razem z dwiema ostatnimi odpowiedziami (zapisanymi też w .claude/kokpit/ostatnie/); przycisk = tylko „Wyczyść i wznów”.",
+      "options": [
+        "wiadomosc",
+        "przycisk"
+      ],
+      "default": "wiadomosc"
     },
     "taskNudge": {
       "type": "boolean",

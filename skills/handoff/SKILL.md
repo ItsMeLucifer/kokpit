@@ -38,7 +38,7 @@ Fokus następnej sesji (może być pusty): $ARGUMENTS
 4. **Sprawdź** plik — z poprzednią wersją, jeśli skrypt zrobił kopię:
    `python3 ${CLAUDE_SKILL_DIR}/scripts/check_handoff.py <plik> --previous <kopia z .poprzednie/>`
    (dla nowego wątku bez `--previous`). Walidator sam czyta plik archiwum obok wątku i jego poprzednią kopię. Popraw każdy BŁĄD i sprawdź ponownie; UWAGI o rozmiarze i Archiwum potraktuj jako zadanie na ten handoff.
-5. **Zakończ** krótko (bez streszczania pliku): ścieżka, wynik sprawdzenia, krok 1 z „Następnych kroków”, i zdanie: „Teraz `/clear`, a w nowej sesji `/wznow`.” Wyjątek: gdy w tle pracują jeszcze agenty albo komendy tej sesji, napisz, że `/clear` dopiero po ich wynikach (przepadłyby), a wyniki dopisz potem do wątku. Nie zaczynaj nowej pracy po handoffie.
+5. **Zakończ** krótko (bez streszczania pliku). Pierwsza linia odpowiedzi to dokładnie `Kokpit · handoff zapisany: <wątek>` — po tym znaczniku Kokpit w sesji nadrzędnej (gdy tę sesję ktoś uruchomił) pomija notatkę o tej turze zamiast ją komentować; jeśli kończysz turę przez `wrap_up`, recap też zaczyna się od tego znacznika. Dalej: ścieżka, wynik sprawdzenia, krok 1 z „Następnych kroków” i zdanie: „Następna wiadomość wyczyści rozmowę i wznowi wątek (albo `/clear`, potem `/wznow`).” Wyjątek: gdy w tle pracują jeszcze agenty albo komendy tej sesji, napisz, że czyszczenie poczeka na ich wyniki (przepadłyby), a wyniki dopisz potem do wątku. Nie zaczynaj nowej pracy po handoffie.
 
 ## Lista do przejrzenia rozmowy
 

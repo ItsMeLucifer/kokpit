@@ -22,6 +22,7 @@ Skrypt już przypiął tę sesję do wybranego wątku (`sessions:`), więc `/han
 3. **Przeczytaj pliki z „Szybkiego startu”** w podanej kolejności. Nie czytaj na zapas całego repozytorium.
 4. **Zgłoś się krótko** (do 6 linii): wątek, cel, stan w jednym zdaniu, otwarte pytania do użytkownika (jeśli są), krok 1.
 5. **Działaj.** Jeśli krok 1 jest jednoznaczny, odwracalny i nie czeka na odpowiedź użytkownika — zacznij go od razu w tej samej odpowiedzi. Jeśli czeka na decyzję — zadaj jedno pytanie i stop.
+   **Wyjątek — skrypt wypisał „PO CZYSZCZENIU”:** Kokpit wyczyścił rozmowę, bo użytkownik coś napisał, a jego wiadomość przyjdzie zaraz po tej odpowiedzi (z ostatnimi odpowiedziami poprzedniej rozmowy w kontekście). Zgłoś się w 1–2 liniach, pierwsza to dokładnie `Kokpit · wznowiony wątek: <wątek>` (po tym znaczniku sesja nadrzędna pomija notatkę o tej turze), i nie zaczynaj kroku 1 ani nie zadawaj pytań — kierunek da ta wiadomość.
 
 ## Zasady
 

@@ -70,6 +70,7 @@ function disk(on: On, files: Record<string, string>) {
   on('process.run', () => ({
     value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false },
   }))
+  on('session.root', () => ({ value: '/p' }))
 }
 
 // ── Rejestr: czyste funkcje ──
