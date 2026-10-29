@@ -1,0 +1,9 @@
+{
+  "_about": "Parameters of the Kokpit repo standard for this project (read by tools/docs/check_docs.py). Keys: docs/repo-standard.md in the Kokpit repo.",
+  "budget_tokens": 6000,
+  "bytes_per_token": 3,
+  "entry_limit": 30000,
+  "link_scope": ["docs/", ".claude/", "AGENTS.md"],
+  "link_skip": ["docs/archive/", ".claude/handoffs/"],
+  "local": []
+}

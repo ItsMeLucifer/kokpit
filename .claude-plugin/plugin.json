@@ -1,0 +1,69 @@
+{
+  "name": "kokpit",
+  "version": "0.10.0",
+  "description": "A band above the prompt (context, usage limits, task progress, background jobs, decisions), handoffs to thread files instead of compaction, a decision register, background jobs, Economy (subagent models and effort matched to the task), workshop skills and a repo-standard setup.",
+  "author": {
+    "name": "Patryk Bożek",
+    "url": "https://github.com/ItsMeLucifer"
+  },
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "handoffMode": {
+      "type": "string",
+      "title": "Handoff mode",
+      "description": "button = only a button in the band; break = by itself at the end of a turn after a finished task (whole list checked off, no question pending), and from the hard threshold at the end of the next turn; auto = by itself at the end of the first turn after the threshold that does not end with a question. At most one automatic handoff per conversation.",
+      "options": [
+        "break",
+        "button",
+        "auto"
+      ],
+      "default": "break"
+    },
+    "handoffTokens": {
+      "type": "number",
+      "title": "Handoff threshold (soft, context tokens)",
+      "description": "From how many context tokens a handoff is offered, or done after a finished task. Never later than 75% of the model window.",
+      "default": 150000
+    },
+    "handoffHardTokens": {
+      "type": "number",
+      "title": "Hard handoff threshold (context tokens)",
+      "description": "From how many tokens a handoff starts at the end of a turn even mid-work or after a question. 0 = soft threshold + 100,000; never beyond 85% of the window.",
+      "default": 0
+    },
+    "handoffClear": {
+      "type": "string",
+      "title": "Clearing after a handoff",
+      "description": "message = after the thread is saved, your next message clears the conversation, resumes the thread and goes to the new session together with the last two answers (also saved in .claude/kokpit/previous/); button = only \"Clear and resume\".",
+      "options": [
+        "message",
+        "button"
+      ],
+      "default": "message"
+    },
+    "taskNudge": {
+      "type": "boolean",
+      "title": "Ask Claude for a task list",
+      "description": "Adds a short request to the system prompt to keep a task list for multi-step work, so the band can show progress.",
+      "default": true
+    },
+    "decisionsFile": {
+      "type": "string",
+      "title": "Decision register file",
+      "description": "Path relative to the project where Claude appends decisions to confirm and the /decisions pane writes rulings. Empty = docs/decisions.md (or an existing docs/decyzje.md).",
+      "default": ""
+    },
+    "language": {
+      "type": "string",
+      "title": "Language of generated files",
+      "description": "Language of new handoff threads, decision-register entries and repo-standard templates. Existing files keep their language. The interface is in English.",
+      "options": [
+        "en",
+        "pl"
+      ],
+      "default": "en"
+    }
+  },
+  "license": "MIT",
+  "repository": "https://github.com/ItsMeLucifer/kokpit"
+}

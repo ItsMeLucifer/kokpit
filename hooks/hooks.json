@@ -1,0 +1,6 @@
+{
+  "description": "Kokpit: the band above the prompt, handoffs, Economy and background jobs",
+  "modules": [
+    "./register.tsx"
+  ]
+}

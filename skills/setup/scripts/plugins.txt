@@ -1,0 +1,4 @@
+# Claude Code plugins installed by `setup.sh machine`: <id> <marketplace source>.
+# Kokpit from GitHub: the same version on every machine; update with claude plugin update kokpit@kokpit.
+# When working on Kokpit itself, KOKPIT = this repository's folder (after a change /reload-plugins is enough).
+kokpit@kokpit ItsMeLucifer/kokpit

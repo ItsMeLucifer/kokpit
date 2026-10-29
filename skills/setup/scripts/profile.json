@@ -1,0 +1,15 @@
+{
+  "_about": "Claude Code settings merged into ~/.claude/settings.json by `setup.sh machine`: missing keys are added, differing ones only reported (--overwrite replaces them). No permissions: set the permission mode on each machine deliberately. An example profile; edit it to your liking.",
+  "alwaysThinkingEnabled": true,
+  "effortLevel": "xhigh",
+  "tui": "fullscreen",
+  "pluginConfigs": {
+    "kokpit@kokpit": {
+      "options": {
+        "handoffMode": "break",
+        "handoffTokens": 200000,
+        "taskNudge": true
+      }
+    }
+  }
+}

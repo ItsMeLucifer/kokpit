@@ -1,0 +1,38 @@
+# Guard for the non-negotiable rules: a PR or push to main touching .claude/org-rules/ (and the protection's own files)
+# stays red until the Owner approves (approval in the PR or the org-rules-ok label from them).
+# Logic and the list of protected paths: tools/docs/check_org_rules_approval.py (self-test: --self-test).
+# This is a signal, not a gate: without branch protection (GitHub Pro) a red result blocks nothing. Description: .claude/org-rules/README.md.
+name: org-rules-guard
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+  pull_request_review:
+    types: [submitted, dismissed]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write   # removing the label after a new push to the PR
+  issues: write          # creating the org-rules-ok label
+
+jobs:
+  guard:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      ORG_RULES_OWNER: {{GITHUB}}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: The org-rules-ok label exists
+        if: github.event_name == 'pull_request'
+        run: gh label create org-rules-ok --color B60205 --description "The Owner approved the change to org-rules" || true
+      - name: Guard self-test
+        run: python3 tools/docs/check_org_rules_approval.py --self-test
+      - name: Approval of org-rules changes
+        run: python3 tools/docs/check_org_rules_approval.py

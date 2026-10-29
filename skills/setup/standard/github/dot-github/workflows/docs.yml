@@ -1,0 +1,35 @@
+# Consistency of documentation and agent rules (dead links, org-rules checksums, startup budget).
+# Pure Python, a few seconds.
+# Locally: python3 tools/docs/check_docs.py
+name: docs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - ".claude/**"
+      - "AGENTS.md"
+      - "**/CLAUDE.md"
+      - "tools/docs/**"
+      - ".github/workflows/docs.yml"
+  pull_request:
+    paths:
+      - "docs/**"
+      - ".claude/**"
+      - "AGENTS.md"
+      - "**/CLAUDE.md"
+      - "tools/docs/**"
+      - ".github/workflows/docs.yml"
+  workflow_dispatch:
+
+jobs:
+  docs:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Check documentation
+        run: python3 tools/docs/check_docs.py

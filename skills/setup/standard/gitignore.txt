@@ -1,0 +1,8 @@
+# ---- Kokpit repo standard ----
+# Validator copies of handoff threads; the threads in .claude/handoffs/*.md are committed.
+.claude/handoffs/.previous/
+# Kokpit's state on this machine (stats, background job logs).
+.claude/kokpit/
+# Machine-local settings; shared ones go to .claude/settings.json.
+.claude/settings.local.json
+.claude/worktrees/

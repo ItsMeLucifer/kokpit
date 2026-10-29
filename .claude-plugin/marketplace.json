@@ -1,0 +1,14 @@
+{
+  "name": "kokpit",
+  "description": "Kokpit: a Claude Code plugin for long, multi-session work",
+  "owner": {
+    "name": "Patryk Bożek"
+  },
+  "plugins": [
+    {
+      "name": "kokpit",
+      "source": "./",
+      "description": "A band above the prompt, handoffs to thread files, a decision register, background jobs, Economy (model and effort routing), workshop skills and a repo-standard setup."
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "_opis": "Parametry standardu repo Kokpitu dla tego projektu (czyta tools/docs/check_docs.py). Opis kluczy: docs/repo-standard.md w repo Kokpitu.",
+  "budzet_tokenow": 6000,
+  "bajty_na_token": 3,
+  "limit_claude_md": 30000,
+  "linki_zakres": ["docs/", ".claude/", "AGENTS.md"],
+  "linki_pomijaj": ["docs/archiwum/", ".claude/handoffs/"],
+  "lokalne": []
+}

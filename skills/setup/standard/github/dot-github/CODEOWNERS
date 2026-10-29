@@ -1,0 +1,9 @@
+# Project owner: @{{GITHUB}}. Only they change the non-negotiable rules and the files that protect them
+# (.claude/org-rules/README.md). Without branch protection (GitHub Pro) this entry is documentation, not a gate;
+# the signal comes from the org-rules-guard workflow.
+/.claude/org-rules/                           @{{GITHUB}}
+/.github/CODEOWNERS                           @{{GITHUB}}
+/.github/workflows/org-rules-guard.yml        @{{GITHUB}}
+/tools/docs/check_org_rules_approval.py       @{{GITHUB}}
+/tools/docs/check_docs.py                     @{{GITHUB}}
+/tools/docs/lock_org_rules.sh                 @{{GITHUB}}
