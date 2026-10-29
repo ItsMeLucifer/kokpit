@@ -192,6 +192,43 @@ class Standard(unittest.TestCase):
         self.assertIn('.claude/org-rules/10-projekt.md', s['missing'])
         self.assertIn('docs/decyzje.md', s['missing'])
 
+    def audit(self):
+        r = run(*STANDARD, 'audit', str(self.repo), '--json')
+        self.assertEqual(r.returncode, 0, r.stdout)
+        return {k: v['status'] for k, v in json.loads(r.stdout)['items'].items()}
+
+    def test_audit_follows_the_interview(self):
+        for lang in ('en', 'pl'):
+            with self.subTest(lang=lang):
+                self.new_repo()
+                self.assertEqual(self.audit()['what'], 'missing')
+                self.init(lang)
+                before = self.audit()
+                self.assertEqual((before['run'], before['verify'], before['outside']), ('missing', 'missing', 'ask'))
+                self.assertEqual(before['layout'], 'partial')  # src/ is not on the map
+                self.fill(lang)
+                after = self.audit()
+                self.assertEqual((after['what'], after['run'], after['verify'], after['protected'], after['work-units']),
+                                 ('ok', 'ok', 'ok', 'ok', 'ok'))
+
+    def test_audit_dead_verification_path_and_record(self):
+        self.init()
+        self.fill()
+        p = self.repo / '.claude/org-rules/10-project.md'
+        p.write_text(p.read_text().replace('```bash\npytest\n```', '```bash\npython3 tools/testing/run.py\n```'))
+        self.assertEqual(self.audit()['verify'], 'partial')
+        r = run(*STANDARD, 'audit', str(self.repo), '--record', 'outside', 'answered', 'all in the repo')
+        self.assertEqual(r.returncode, 0, r.stdout)
+        run(*STANDARD, 'audit', str(self.repo), '--record', 'pins', 'n/a', 'no runtime')
+        s = self.audit()
+        self.assertEqual((s['outside'], s['pins']), ('ok', 'na'))
+        data = json.loads((self.repo / 'tools/docs/standard.json').read_text())
+        self.assertEqual(data['budget_tokens'], 6000)  # other keys kept
+        data['audit']['outside']['date'] = '2020-01-01'  # an old answer comes back as a question
+        (self.repo / 'tools/docs/standard.json').write_text(json.dumps(data))
+        self.assertEqual(self.audit()['outside'], 'ask')
+        self.assertEqual(run(*STANDARD, 'audit', str(self.repo), '--record', 'nonsense', 'answered').returncode, 2)
+
     def test_core_templates_have_no_placeholders(self):
         standard = HERE.parent / 'standard'
         for base in (standard / 'core', standard / 'en' / 'core', standard / 'pl' / 'core'):

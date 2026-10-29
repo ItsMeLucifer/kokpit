@@ -15,6 +15,11 @@
       Moves files to docs/archive/standard-<date>/ (git mv when tracked). A migration never deletes anything.
   standard.py hook <project>
       Adds the PostToolUse hook with check_docs.py to the project's .claude/settings.json.
+  standard.py audit <project> [--json]
+      Harness audit (skills/setup/harness-audit.md): for each question, what the repo shows (✓ covered, ~ partial,
+      ✗ missing, ? only the Owner can say, – not applicable). Changes nothing. Works on any repo, standard or not.
+  standard.py audit <project> --record <item> answered|n/a|clear "<note>"
+      Records the Owner's answer or exclusion in tools/docs/standard.json; answers count for 180 days.
 
 The standard comes in English and Polish. A repo keeps the language it already follows; a new one gets --lang.
 """
@@ -403,6 +408,293 @@ def cmd_archive(project: Path, paths: list[str]) -> int:
     return 0
 
 
+# --- harness audit -----------------------------------------------------------------------------------
+# Evidence for the questions in skills/setup/harness-audit.md. The script only reports what it can see in the repo;
+# the setup skill asks the Owner about everything marked ✗, ~ or ?.
+
+AUDIT_ITEMS = [
+    ('what', 'What is this system?'),
+    ('layout', 'How is it organized?'),
+    ('run', 'How do I run it?'),
+    ('verify', 'How do I verify it?'),
+    ('now', 'Where are we now?'),
+    ('near-code', 'Is area knowledge next to the code?'),
+    ('outside', 'What knowledge lives outside the repo?'),
+    ('protected', 'What must the agent not touch or pay for?'),
+    ('pins', 'Are tool and runtime versions pinned?'),
+    ('feedback', 'Does the feedback run without being asked?'),
+    ('decay', 'Is the written knowledge still true?'),
+    ('work-units', 'What is a unit of work, and when is it done?'),
+]
+MARKS = {'ok': '✓', 'partial': '~', 'missing': '✗', 'ask': '?', 'na': '–'}
+# Answers recorded with --record count for this many days; after that the question comes back (knowledge decays).
+ANSWER_DAYS = 180
+SECTIONS = {
+    'summary': ('Project summary', 'Skrót projektu'),
+    'environment': ('Stack and environment', 'Stos i środowisko'),
+    'verification': ('Verification', 'Weryfikacja'),
+    'protected': ('Protected', 'Nietykalne'),
+}
+ENTRY_DEFAULT_ROWS = 5  # rows of the "Where things are" table that come with the template
+RUN_FILES = ('Makefile', 'justfile', 'Taskfile.yml', 'package.json', 'pubspec.yaml', 'pyproject.toml', 'setup.py',
+             'Cargo.toml', 'go.mod', 'project.godot', 'build.gradle', 'build.gradle.kts', 'pom.xml', 'CMakeLists.txt',
+             'docker-compose.yml', 'compose.yaml', 'init.sh', 'Gemfile', 'mix.exs', '*.sln', '*.uproject')
+PIN_FILES = ('.nvmrc', '.node-version', '.tool-versions', '.python-version', 'mise.toml', '.mise.toml',
+             'rust-toolchain', 'rust-toolchain.toml', '.fvmrc', '.fvm/fvm_config.json', 'global.json', '.ruby-version',
+             '.java-version', '.devcontainer/devcontainer.json', 'Dockerfile', 'flake.nix', 'uv.lock', 'poetry.lock',
+             'package-lock.json', 'pnpm-lock.yaml', 'yarn.lock', 'pubspec.lock', 'Cargo.lock', 'go.sum')
+PROGRESS_FILES = ('PROGRESS.md', 'ROADMAP.md', 'TODO.md', 'docs/progress.md', 'docs/roadmap.md', 'docs/postep.md')
+NEAR_CODE_DOCS = ('README.md', 'ARCHITECTURE.md', 'CONSTRAINTS.md', 'CLAUDE.md', 'AGENTS.md')
+LARGE_DIR = 20  # tracked files in a top-level directory that deserve their own knowledge next to the code
+
+
+def section(text: str, names: tuple[str, ...]) -> str | None:
+    m = re.search(r'^## (?:' + '|'.join(map(re.escape, names)) + r')[^\n]*\n(.*?)(?=^## |\Z)', text, re.M | re.S)
+    return m.group(1) if m else None
+
+
+def filled(body: str | None) -> list[str]:
+    """Meaningful lines of a section: no comments, templates, table headers or fences."""
+    if body is None:
+        return []
+    body = re.sub(r'<!--.*?-->', '', body, flags=re.S)
+    return [l.strip() for l in body.splitlines()
+            if l.strip() and '{{' not in l and not l.strip().startswith(('```', '|---', '| Kind', '| Rodzaj', '| File', '| Plik'))]
+
+
+def tracked_files(project: Path) -> list[str]:
+    r = git(project, 'ls-files', '--cached', '--others', '--exclude-standard')
+    if r.returncode == 0:
+        return r.stdout.splitlines()
+    return [str(p.relative_to(project)) for p in project.rglob('*') if p.is_file() and '.git' not in p.parts]
+
+
+def rule_globs(project: Path) -> list[str]:
+    globs = []
+    for p in sorted((project / '.claude' / 'rules').rglob('*.md')):
+        text = p.read_text(errors='ignore')
+        fm = text.split('---', 2)[1] if text.startswith('---') and text.count('---') >= 2 else ''
+        m = re.search(r'^paths:[ \t]*(.*?)(?=^[A-Za-z_][\w-]*:|\Z)', fm + '\n', re.M | re.S)
+        if m:
+            raw = m.group(1).strip()
+            parts = raw.strip('[]').split(',') if not raw.startswith('-') else re.findall(r'^\s*-\s*(.+)$', raw, re.M)
+            globs += [g.strip().strip('"\'') for g in parts if g.strip()]
+    return globs
+
+
+def exists_any(project: Path, names) -> list[str]:
+    return sorted({str(p.relative_to(project)) for n in names for p in project.glob(n)})
+
+
+def recorded(project: Path) -> dict:
+    try:
+        return json.loads((project / 'tools' / 'docs' / 'standard.json').read_text()).get('audit', {})
+    except (OSError, ValueError):
+        return {}
+
+
+def audit(project: Path) -> dict:
+    lang = repo_language(project)
+    files = tracked_files(project)
+    found = entries(project)
+    entry_rel = '.claude/CLAUDE.md' if '.claude/CLAUDE.md' in found else (found[0] if found else None)
+    entry = (project / entry_rel).read_text(errors='ignore') if entry_rel else ''
+    pfile = project / '.claude' / 'org-rules' / PROJECT_FILE[lang]
+    ptext = pfile.read_text(errors='ignore') if pfile.exists() else ''
+    # Without the standard the sections may live in the entry itself.
+    source_text = ptext + '\n' + entry
+    rules_dir = project / '.claude' / 'rules'
+    rule_text = ' '.join(p.read_text(errors='ignore') for p in rules_dir.rglob('*.md')) if rules_dir.is_dir() else ''
+    docs_index = (project / 'docs' / 'README.md').read_text(errors='ignore') if (project / 'docs' / 'README.md').exists() else ''
+    known = entry + rule_text + docs_index + ptext
+    out = {}
+
+    def put(key, status, evidence):
+        out[key] = {'status': status, 'evidence': evidence}
+
+    # what
+    # The description is the text between the title and the first import or section.
+    head = re.split(r'^(?:@|## )', re.sub(r'\A---\n.*?\n---\n', '', entry, flags=re.S), maxsplit=1, flags=re.M)[0]
+    lines = [l for l in head.splitlines() if l.strip() and not l.startswith(('#', '<!--')) and '{{' not in l]
+    if entry_rel and lines:
+        put('what', 'ok', f'{entry_rel}: "{lines[0][:70]}"')
+    elif (project / 'README.md').exists():
+        put('what', 'partial', 'only README.md; the entry has no description')
+    else:
+        put('what', 'missing', 'no entry file and no README.md')
+
+    # layout
+    top = sorted({f.split('/')[0] for f in files if '/' in f and not f.startswith('.')})
+    unmapped = [d for d in top if not re.search(r'(?<![\w.-])' + re.escape(d) + r'(?:/|`|\b)', known)]
+    rows = len(re.findall(r'^\|\s*`', section(entry, ('Where things are', 'Gdzie co jest')) or '', re.M))
+    if not entry_rel:
+        put('layout', 'missing', 'no entry file with a map')
+    elif unmapped:
+        put('layout', 'partial', f'directories the map does not mention: {", ".join(unmapped[:8])}'
+            + (f' (+{len(unmapped) - 8})' if len(unmapped) > 8 else ''))
+    else:
+        put('layout', 'ok', f'every top-level directory is mapped ({len(top)}; map rows {rows})')
+
+    # run
+    env = filled(section(source_text, SECTIONS['environment']))
+    run_files = exists_any(project, RUN_FILES)
+    if env:
+        put('run', 'ok', f'"Stack and environment" filled ({len(env)} lines); run files: {", ".join(run_files) or "none"}')
+    elif run_files:
+        put('run', 'partial', f'run files exist ({", ".join(run_files[:5])}) but no "Stack and environment" section says how to use them')
+    else:
+        put('run', 'missing', 'no "Stack and environment" section and no recognised run files')
+
+    # verify
+    body = section(source_text, SECTIONS['verification'])
+    blocks = re.findall(r'```(?:bash|sh)?\n(.*?)```', body or '', re.S)
+    commands = [l.strip() for b in blocks for l in b.splitlines() if l.strip() and not l.strip().startswith('#') and '{{' not in l]
+    dead = []
+    for c in commands:
+        for token in c.split():
+            if '/' in token and not token.startswith(('-', '$', '~', 'http')) and not any(ch in token for ch in '*{}<>'):
+                path = token.strip('"\'').split('::')[0]
+                if not (project / path).exists() and not Path(path).is_absolute():
+                    dead.append(path)
+    ci = exists_any(project, ('.github/workflows/*.yml', '.github/workflows/*.yaml', '.gitlab-ci.yml', 'bitbucket-pipelines.yml'))
+    try:
+        tests = json.loads((project / '.claude' / 'kokpit.json').read_text()).get('tests')
+    except (OSError, ValueError):
+        tests = None
+    if not commands:
+        put('verify', 'missing', 'no verification commands' + (f' (kokpit.json tests: {tests})' if tests else ''))
+    elif dead:
+        put('verify', 'partial', f'{len(commands)} commands, but these paths do not exist: {", ".join(dead[:5])}')
+    else:
+        put('verify', 'ok', f'{len(commands)} commands' + (f'; /tests: {tests}' if tests else '; no "tests" in .claude/kokpit.json'))
+
+    # now
+    threads = [p for p in (project / '.claude' / 'handoffs').glob('*.md') if not p.name.endswith(('.archive.md', '.archiwum.md'))]
+    register = [r for r in REGISTER.values() if (project / r).exists()]
+    progress = exists_any(project, PROGRESS_FILES)
+    evidence = f'handoff threads {len(threads)}, register {", ".join(register) or "none"}, progress files {", ".join(progress) or "none"}'
+    put('now', 'ok' if threads or progress else 'partial' if register else 'missing', evidence)
+
+    # near-code
+    counts: dict[str, int] = {}
+    for f in files:
+        if '/' in f and not f.startswith('.'):
+            counts[f.split('/')[0]] = counts.get(f.split('/')[0], 0) + 1
+    globs = rule_globs(project)
+    large = [d for d, n in counts.items() if n >= LARGE_DIR and d not in ('docs',)]
+    bare = [d for d in sorted(large)
+            if not any(g.startswith((d + '/', '**')) for g in globs)
+            and not any((project / d / n).exists() for n in NEAR_CODE_DOCS)]
+    if not large:
+        put('near-code', 'ok', 'no large top-level directories')
+    elif bare:
+        put('near-code', 'partial', f'large directories without an area rule or a local doc: {", ".join(bare[:8])}')
+    else:
+        put('near-code', 'ok', f'{len(large)} large directories, each with an area rule or a local doc ({len(globs)} rule globs)')
+
+    # outside: only the Owner knows
+    put('outside', 'ask', 'decisions in chats, tickets, wikis or people\'s heads: only the Owner can say')
+
+    # protected
+    pbody = section(source_text, SECTIONS['protected'])
+    m = re.search(r'```kokpit-(?:protected|nietykalne)\n(.*?)```', pbody or source_text, re.S)
+    items = [l for l in (m.group(1).splitlines() if m else []) if l.strip() and not l.strip().startswith('#') and '{{' not in l]
+    try:
+        servers = sorted(json.loads((project / '.mcp.json').read_text()).get('mcpServers', {}))
+    except (OSError, ValueError):
+        servers = []
+    unlisted = [s for s in servers if f'mcp__{s}' not in (m.group(1) if m else '')]
+    if items and not unlisted:
+        put('protected', 'ok', f'{len(items)} items in the protected list')
+    elif items:
+        put('protected', 'partial', f'{len(items)} items; project MCP servers not classified: {", ".join(unlisted)}')
+    else:
+        put('protected', 'ask', 'empty protected list: is there really no local data, manual work, generator or paid tool?')
+
+    # pins
+    pins = exists_any(project, PIN_FILES)
+    mentions = re.findall(r'\b\d+\.\d+(?:\.\d+)?\b', '\n'.join(env))
+    if pins and mentions:
+        put('pins', 'ok', f'pinned in {", ".join(pins[:5])}; versions named in the project file')
+    elif pins or mentions:
+        put('pins', 'partial', ('pin files: ' + ', '.join(pins[:5])) if pins else 'versions only in text, no pin or lock file')
+    else:
+        put('pins', 'missing', 'no pin or lock files and no versions in the project file')
+
+    # feedback
+    hook = has_hook(project)
+    parts = [f'check_docs hook {"yes" if hook else "no"}', f'CI {", ".join(ci) if ci else "none"}']
+    put('feedback', 'ok' if hook and ci else 'partial' if hook or ci else 'missing', '; '.join(parts))
+
+    # decay
+    check = project / 'tools' / 'docs' / 'check_docs.py'
+    if check.exists():
+        r = subprocess.run([sys.executable, '-I', str(check)], cwd=project, capture_output=True, text=True)
+        summary = ((r.stdout + r.stderr).strip().splitlines() or [''])[-1]
+        n = re.search(r'(\d+) errors?, (\d+) warnings?', summary)
+        bad = n and (int(n.group(1)) or int(n.group(2)))
+        put('decay', 'partial' if bad else 'ok', summary or f'check_docs exit {r.returncode}')
+    else:
+        put('decay', 'ask', 'no check_docs.py: dead links, paths and commands are not checked')
+
+    # work-units
+    core = (project / '.claude' / 'org-rules' / ('00-core-agents.md' if lang == 'en' else '00-rdzen-praca-agentow.md')).exists()
+    if core and commands:
+        put('work-units', 'ok', 'core rules (commits, parallel agents, reports) plus the verification commands define "done"')
+    elif core:
+        put('work-units', 'partial', 'core rules cover commits and parallel agents; without verification commands "done" is undefined')
+    else:
+        put('work-units', 'ask', 'no rules on what one change is, when it is done, or how parallel agents stay apart')
+
+    # Answers and exclusions the Owner gave earlier (tools/docs/standard.json, "audit").
+    today = time.time()
+    for key, rec in recorded(project).items():
+        if key not in out or not isinstance(rec, dict):
+            continue
+        age = (today - time.mktime(time.strptime(rec.get('date', '1970-01-01'), '%Y-%m-%d'))) / 86400
+        if rec.get('status') == 'n/a':
+            out[key] = {'status': 'na', 'evidence': f'not applicable: {rec.get("note", "")}'}
+        elif rec.get('status') == 'answered' and out[key]['status'] in ('ask', 'partial') and age <= ANSWER_DAYS:
+            out[key] = {'status': 'ok', 'evidence': f'answered {rec["date"]}: {rec.get("note", "")}'}
+        elif rec.get('status') == 'answered' and age > ANSWER_DAYS:
+            out[key]['evidence'] += f' (last answered {rec["date"]}, over {ANSWER_DAYS} days ago: ask again)'
+    return {'language': lang, 'entry': entry_rel, 'items': out}
+
+
+def cmd_audit(project: Path, as_json: bool, record: list[str]) -> int:
+    if record:
+        if len(record) < 2 or record[0] not in dict(AUDIT_ITEMS) or record[1] not in ('answered', 'n/a', 'clear'):
+            print('  ✗ --record <item> answered|n/a|clear "<note>"; items: ' + ', '.join(k for k, _ in AUDIT_ITEMS))
+            return 2
+        path = project / 'tools' / 'docs' / 'standard.json'
+        try:
+            data = json.loads(path.read_text()) if path.exists() else {}
+        except ValueError:
+            print(f'  ✗ {path}: invalid JSON')
+            return 2
+        data.setdefault('audit', {})
+        if record[1] == 'clear':
+            data['audit'].pop(record[0], None)
+        else:
+            data['audit'][record[0]] = {'status': record[1], 'date': time.strftime('%Y-%m-%d'),
+                                        'note': ' '.join(record[2:])}
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + '\n')
+        print(f'  ✓ {record[0]}: {record[1]} recorded in tools/docs/standard.json')
+        return 0
+    result = audit(project)
+    if as_json:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0
+    items = result['items']
+    for key, question in AUDIT_ITEMS:
+        it = items[key]
+        print(f'  {MARKS[it["status"]]} {key:<10} {question}\n      {it["evidence"]}')
+    done = sum(1 for it in items.values() if it['status'] in ('ok', 'na'))
+    print(f'  harness audit: {done}/{len(items)} covered')
+    return 0
+
+
 VALUE_OPTIONS = ('project', 'owner', 'github', 'description', 'lang')
 
 
@@ -438,6 +730,9 @@ def main(argv: list[str]) -> int:
         return cmd_rename_entry(project)
     if cmd == 'archive':
         return cmd_archive(project, free)
+    if cmd == 'audit':
+        record = free if 'record' in opts else []
+        return cmd_audit(project, 'json' in opts, record)
     if cmd == 'hook':
         print('  + hook added' if merge_hook(project, repo_language(project, opts.get('lang'))) else '  ✓ hook already there')
         return 0

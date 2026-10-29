@@ -119,12 +119,19 @@ Adapted from [mattpocock/skills](https://github.com/mattpocock/skills) (MIT, see
 - `setup.sh machine` installs uv and the plugins from `plugins.txt`, merges a settings profile (`profile.json`) into `~/.claude/settings.json` (missing keys only; `--overwrite` replaces differing ones), and optionally graphify and headroom.
 - `setup.sh project` handles `.gitignore`, the thread directory, the fixed per-session cost report and the repo standard.
 
-The **repo standard** ([docs/repo-standard.md](docs/repo-standard.md)) is one method for three states: an empty repo gets a skeleton and a short interview; a repo with Claude but without the standard gets a difference report and a step-by-step migration, each step with your consent, deleting nothing; a compliant repo gets a check and core updates. In short:
+The **repo standard** ([docs/repo-standard.md](docs/repo-standard.md)) is one method for three states: an empty repo gets a skeleton and an interview; a repo with Claude but without the standard gets a difference report and a step-by-step migration, each step with your consent, deleting nothing; a compliant repo gets a check and core updates. In short:
 
 - `.claude/CLAUDE.md` (with `AGENTS.md` in the root as a link) imports the org-rules summary and the project file;
 - org-rules are a shared core from Kokpit (`00-core-*`, updated by setup) plus the project file (`10-project.md`: owner, rules, stack and environment, verification commands, the **Protected** list);
 - `tools/docs/check_docs.py` checks the manifest, the startup budget (6k tokens), dead `paths:` globs, directory hints, links, verification commands and the agent's memory, and runs as a `PostToolUse` hook after every edit in `.claude/` and `docs/`;
 - `tools/docs/lock_org_rules.sh` writes deny rules (editing org-rules, protected files) and ask rules (commit, push, branch switches, destructive git, paid MCP tools) to `~/.claude/settings.json`, and locks the rules with `chmod`. Only the owner removes the lock, from their own terminal.
+
+In all three states setup runs a **harness audit** ([skills/setup/harness-audit.md](skills/setup/harness-audit.md)). Whatever is not in the repo does not exist for an agent, so the audit asks what a brand-new session would have to guess:
+
+- `standard.py audit` collects the evidence for twelve questions: the fresh session test (what is this system, how is it organised, how do I run it, how do I verify it, where are we now), plus area knowledge next to the code, knowledge that lives outside the repo, protected things, pinned versions, automatic feedback, stale knowledge, and what a unit of work is;
+- a separate subagent takes the fresh session test using only the repo, so the setup is not graded by its own author; every guess it has to make counts as a gap;
+- the interview goes on until every gap is written down or the owner rules it out. Each answer goes to its one place (org-rules, an area rule, the map, the wiki, the decision register), and the owner's personal way of working goes to agent memory. Answers the script cannot confirm are recorded with a date and come back after 180 days;
+- at the end the test runs again, and setup reports before and after.
 
 Why `CLAUDE.md` and not only `AGENTS.md`: since Claude Code 2.1.277 `AGENTS.md` is read only as a fallback when a folder has no `CLAUDE.md` (and not on every provider), and the `@` imports the standard relies on are a Claude Code feature. A link gives other agents the same file.
 

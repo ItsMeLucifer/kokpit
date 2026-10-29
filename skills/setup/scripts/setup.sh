@@ -3,7 +3,7 @@
 #   setup.sh check [project]                                     what is there and what is missing (changes nothing)
 #   setup.sh machine [--graphify] [--headroom] [--overwrite] [--tidy]   uv, plugins, settings profile, optional tools
 #   setup.sh project [project] [--graphify] [--force]            .gitignore, thread directory, repo-standard state, optional graphify
-#   setup.sh standard <state|init|core|rename-entry|archive|hook> <project> [...]   the repo standard (scripts/standard.py)
+#   setup.sh standard <state|init|core|rename-entry|archive|hook|audit> <project> [...]   the repo standard (scripts/standard.py)
 # Every step is idempotent: a second run says "already there" and breaks nothing.
 # Written for bash 3.2 (the macOS default): no associative arrays and no ${x,,}.
 set -u

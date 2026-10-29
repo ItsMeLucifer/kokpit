@@ -52,7 +52,7 @@ docs/
 tools/docs/
   check_docs.py                          CORE: consistency (§6)
   lock_org_rules.sh                      CORE: lock and permission rules (§5)
-  standard.json                          project parameters for check_docs (budget, link scope, local directories)
+  standard.json                          project parameters for check_docs (budget, link scope, local directories) and the audit's recorded answers
   check_docs_project.py                  optional: project checks, check(root, files) -> (errors, warnings)
 .github/                                 optional: CODEOWNERS, docs.yml, org-rules-guard.yml
 ```
@@ -110,7 +110,7 @@ General checks: the org-rules manifest, headers and core markers, the entry name
 
 ## 7. `/kokpit:setup project`: one method, three states
 
-Script commands (`setup.sh standard <command> <project>`): `state [--json]`, `init --project … --owner … --github … [--description …] [--lang en|pl] [--github-module]` (missing files only), `core [--write]` (core update, old versions to `docs/archive/standard-<date>/`), `rename-entry` (`CLAUDE.MD` → `CLAUDE.md`), `archive <paths>`, `hook`. The steps that need a conversation (the interview, splitting content) are led by the `setup` skill.
+Script commands (`setup.sh standard <command> <project>`): `state [--json]`, `audit [--json] [--record <item> answered|n/a|clear "<note>"]`, `init --project … --owner … --github … [--description …] [--lang en|pl] [--github-module]` (missing files only), `core [--write]` (core update, old versions to `docs/archive/standard-<date>/`), `rename-entry` (`CLAUDE.MD` → `CLAUDE.md`), `archive <paths>`, `hook`. The steps that need a conversation (the interview, splitting content) are led by the `setup` skill.
 
 | State | Detection | What happens |
 |---|---|---|
@@ -119,6 +119,16 @@ Script commands (`setup.sh standard <command> <project>`): `state [--json]`, `in
 | **C. Compliant** | org-rules with a core marker | only a check: a newer core (an update to propose), drift of the permission rules, the startup budget, dead globs, verification commands, memory |
 
 Org-rules changes (also in A and B) follow the procedure in §5, so they need the Owner's `--unlock`.
+
+### The harness audit (all three states)
+
+Whatever is not in the repo does not exist for the agent, and every session has to guess it again. The audit (`skills/setup/harness-audit.md`, evidence from `standard.py audit`) closes those gaps:
+
+1. **Evidence** for twelve questions. The first five are the fresh session test: what is this system, how is it organised, how do I run it, how do I verify it, where are we now. The rest: area knowledge next to the code, knowledge outside the repo (chats, tickets, people's heads), protected things, pinned versions, feedback that runs without being asked, stale knowledge, and what a unit of work is (atomic, verified, isolated, durable).
+2. **The fresh session test by a separate subagent** with only the repo; every guess it makes is a gap.
+3. **An interview until nothing is open**: each item is written down or ruled out by the Owner (`--record <item> n/a`). Answers the script cannot confirm are recorded with a date in `tools/docs/standard.json` and come back after 180 days, because knowledge decays.
+4. **Each answer in its one place**: org-rules, area rules, the map, the wiki, the decision register, a handoff thread. The Owner's own way of working with agents goes to agent memory; project knowledge never goes only there, because memory is not in the repo.
+5. **The test again**, with a before/after report.
 
 ## 8. Outside the repo (machine)
 
