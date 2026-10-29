@@ -13,6 +13,7 @@
 | `.claude/org-rules/` | non-negotiable rules | `README.md` |
 | `.claude/rules/` | area rules (loaded when working on matching files) | `paths:` header |
 | `docs/` | wiki: how things work and why | `docs/README.md` |
+| `docs/progress.md` | where the work stands, one line per area | read before starting work in an area |
 | `docs/decisions.md` | decisions waiting for the Owner | `/decisions` |
 | `.claude/handoffs/` | work threads between sessions | `/handoff`, `/resume` |
 {{MAP}}

@@ -229,6 +229,28 @@ class Standard(unittest.TestCase):
         self.assertEqual(self.audit()['outside'], 'ask')
         self.assertEqual(run(*STANDARD, 'audit', str(self.repo), '--record', 'nonsense', 'answered').returncode, 2)
 
+    def test_progress_file_and_expiring_rules(self):
+        for lang in ('en', 'pl'):
+            with self.subTest(lang=lang):
+                self.new_repo()
+                self.init(lang)
+                self.fill(lang)
+                progress = self.repo / ('docs/progress.md' if lang == 'en' else 'docs/postep.md')
+                self.assertNotIn('{{', progress.read_text())
+                self.assertEqual(self.audit()['now'], 'partial')  # created empty
+                progress.write_text(progress.read_text().replace('|---|---|---|---|\n', '|---|---|---|---|\n| Cutscenes | 3 of 7 | intro | x |\n', 1))
+                self.assertEqual(self.audit()['now'], 'ok')
+                threads = self.repo / '.claude/handoffs'
+                (threads / 'cutscenes.md').write_text('---\nthread: cutscenes\nupdated: 2099-01-01 10:00\n---\n')
+                self.assertEqual(self.audit()['now'], 'partial')  # a thread is newer than the progress file
+                self.check('--write-manifest')
+                self.assertIn('these threads changed later: cutscenes', self.check().stdout)
+                p = self.repo / FILL[lang]['file']
+                p.write_text(p.read_text().replace('1. A rule.', '1. A rule. (until: 2020-01-01)').replace('1. Zasada.', '1. Zasada. (do: 2020-01-01)'))
+                self.check('--write-manifest')
+                self.assertIn('expired on 2020-01-01', self.check().stdout)
+                self.assertEqual(self.audit()['rules'], 'partial')
+
     def test_core_templates_have_no_placeholders(self):
         standard = HERE.parent / 'standard'
         for base in (standard / 'core', standard / 'en' / 'core', standard / 'pl' / 'core'):

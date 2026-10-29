@@ -45,6 +45,7 @@ EXECUTABLE = {'tools/docs/check_docs.py', 'tools/docs/lock_org_rules.sh'}
 LANGUAGES = ('en', 'pl')
 PROJECT_FILE = {'en': '10-project.md', 'pl': '10-projekt.md'}
 REGISTER = {'en': 'docs/decisions.md', 'pl': 'docs/decyzje.md'}
+PROGRESS = {'en': 'docs/progress.md', 'pl': 'docs/postep.md'}
 ARCHIVE_DIR = {'en': 'docs/archive', 'pl': 'docs/archiwum'}
 # Template placeholders per language: (project, owner, GitHub login, description).
 PLACEHOLDERS = {
@@ -151,7 +152,7 @@ def state(project: Path, wanted: str | None = None) -> dict:
     for rel, _ in core:
         if not (project / rel).exists():
             missing.append(rel)
-    for rel in ('.claude/CLAUDE.md', f'.claude/org-rules/{PROJECT_FILE[lang]}', 'docs/README.md', REGISTER[lang],
+    for rel in ('.claude/CLAUDE.md', f'.claude/org-rules/{PROJECT_FILE[lang]}', 'docs/README.md', REGISTER[lang], PROGRESS[lang],
                 'tools/docs/standard.json', '.claude/org-rules/MANIFEST.sha256'):
         if not (project / rel).exists():
             missing.append(rel)
@@ -290,6 +291,7 @@ def cmd_init(project: Path, opts: dict) -> int:
     names = PLACEHOLDERS[lang]
     values = dict(zip(names, (opts['project'], opts['owner'], opts['github'], opts.get('description'))))
     values['GITHUB'] = opts['github']
+    values['DATE'] = values['DATA'] = time.strftime('%Y-%m-%d')
     sources = [(rel, src, False) for rel, src in core_sources(lang)]
     project_templates = STANDARD / lang / 'project'
     sources += [(rel, source(project_templates, rel), True) for rel in files(project_templates)]
@@ -418,7 +420,9 @@ AUDIT_ITEMS = [
     ('run', 'How do I run it?'),
     ('verify', 'How do I verify it?'),
     ('now', 'Where are we now?'),
+    ('entry', 'Is the entry a short router?'),
     ('near-code', 'Is area knowledge next to the code?'),
+    ('rules', 'Does every rule have a reason, and do none contradict?'),
     ('outside', 'What knowledge lives outside the repo?'),
     ('protected', 'What must the agent not touch or pay for?'),
     ('pins', 'Are tool and runtime versions pinned?'),
@@ -435,7 +439,6 @@ SECTIONS = {
     'verification': ('Verification', 'Weryfikacja'),
     'protected': ('Protected', 'Nietykalne'),
 }
-ENTRY_DEFAULT_ROWS = 5  # rows of the "Where things are" table that come with the template
 RUN_FILES = ('Makefile', 'justfile', 'Taskfile.yml', 'package.json', 'pubspec.yaml', 'pyproject.toml', 'setup.py',
              'Cargo.toml', 'go.mod', 'project.godot', 'build.gradle', 'build.gradle.kts', 'pom.xml', 'CMakeLists.txt',
              'docker-compose.yml', 'compose.yaml', 'init.sh', 'Gemfile', 'mix.exs', '*.sln', '*.uproject')
@@ -443,7 +446,10 @@ PIN_FILES = ('.nvmrc', '.node-version', '.tool-versions', '.python-version', 'mi
              'rust-toolchain', 'rust-toolchain.toml', '.fvmrc', '.fvm/fvm_config.json', 'global.json', '.ruby-version',
              '.java-version', '.devcontainer/devcontainer.json', 'Dockerfile', 'flake.nix', 'uv.lock', 'poetry.lock',
              'package-lock.json', 'pnpm-lock.yaml', 'yarn.lock', 'pubspec.lock', 'Cargo.lock', 'go.sum')
-PROGRESS_FILES = ('PROGRESS.md', 'ROADMAP.md', 'TODO.md', 'docs/progress.md', 'docs/roadmap.md', 'docs/postep.md')
+PROGRESS_FILES = ('docs/progress.md', 'docs/postep.md', 'PROGRESS.md', 'docs/roadmap.md', 'ROADMAP.md', 'TODO.md')
+ENTRY_LINES = 200       # an entry with its imports above this is an encyclopedia, not a router
+SUMMARY_RULES = 8       # lasting rules in the project summary; more belong in area rules or further files
+UNTIL = re.compile(r'\((?:until|do):\s*(\d{4}-\d{2}-\d{2})\)')
 NEAR_CODE_DOCS = ('README.md', 'ARCHITECTURE.md', 'CONSTRAINTS.md', 'CLAUDE.md', 'AGENTS.md')
 LARGE_DIR = 20  # tracked files in a top-level directory that deserve their own knowledge next to the code
 
@@ -572,8 +578,43 @@ def audit(project: Path) -> dict:
     threads = [p for p in (project / '.claude' / 'handoffs').glob('*.md') if not p.name.endswith(('.archive.md', '.archiwum.md'))]
     register = [r for r in REGISTER.values() if (project / r).exists()]
     progress = exists_any(project, PROGRESS_FILES)
-    evidence = f'handoff threads {len(threads)}, register {", ".join(register) or "none"}, progress files {", ".join(progress) or "none"}'
-    put('now', 'ok' if threads or progress else 'partial' if register else 'missing', evidence)
+    rows, fresh = 0, True
+    if progress:
+        ptext_ = (project / progress[0]).read_text(errors='ignore')
+        rows = sum(1 for l in ptext_.splitlines() if l.startswith('|') and not l.startswith('|---')) - 3
+        stamp = re.search(r'^(?:updated|zaktualizowano):\s*(\d{4}-\d{2}-\d{2})', ptext_, re.M)
+        newest = max((re.search(r'^updated:\s*(\d{4}-\d{2}-\d{2})', t.read_text(errors='ignore'), re.M) or [None, ''])[1]
+                     for t in threads) if threads else ''
+        fresh = bool(stamp) and newest <= stamp.group(1)
+    evidence = (f'progress: {progress[0] + f" ({max(rows, 0)} lines" + ("" if fresh else ", older than a thread") + ")" if progress else "none"}'
+                f'; handoff threads {len(threads)}; register {", ".join(register) or "none"}')
+    if progress and rows > 0 and fresh:
+        put('now', 'ok', evidence)
+    elif progress or threads or register:
+        put('now', 'partial', evidence + ('' if progress else ': state exists per thread, but nothing says where the whole project stands'))
+    else:
+        put('now', 'missing', evidence)
+
+    # entry: a router (overview, commands, hard constraints, pointers), not an encyclopedia
+    loaded = [project / entry_rel] if entry_rel else []
+    for m in re.finditer(r'^@([\w./\-]+\.md)\s*$', entry, re.M):
+        target = (project / entry_rel).parent / m.group(1)
+        if target.exists():
+            loaded.append(target)
+    lines = sum(p.read_text(errors='ignore').count('\n') for p in loaded)
+    tokens = sum(p.stat().st_size for p in loaded) // 3
+    summary_rules = len(re.findall(r'^\d+\. (?!\{\{)', section(ptext, SECTIONS['summary']) or '', re.M))
+    try:
+        budget = json.loads((project / 'tools' / 'docs' / 'standard.json').read_text()).get('budget_tokens', 6000)
+    except (OSError, ValueError):
+        budget = 6000
+    evidence = f'{lines} lines ≈ {tokens} tokens with imports (budget {budget}); {summary_rules} lasting rules in the summary'
+    if not entry_rel:
+        put('entry', 'missing', 'no entry file')
+    elif lines > ENTRY_LINES or tokens > budget or summary_rules > SUMMARY_RULES:
+        put('entry', 'partial', evidence + ': move area rules and details out (rules with paths:, the wiki)')
+    else:
+        put('entry', 'ok', evidence)
 
     # near-code
     counts: dict[str, int] = {}
@@ -591,6 +632,17 @@ def audit(project: Path) -> dict:
         put('near-code', 'partial', f'large directories without an area rule or a local doc: {", ".join(bare[:8])}')
     else:
         put('near-code', 'ok', f'{len(large)} large directories, each with an area rule or a local doc ({len(globs)} rule globs)')
+
+    # rules: a reason for each, an end for temporary ones, no contradictions (the review needs the Owner)
+    rule_files = [project / f for f in files if f.endswith('.md') and (f.startswith(('.claude/org-rules/1', '.claude/rules/')) or f == entry_rel)]
+    expired = [f'{p.relative_to(project)} ({d})' for p in rule_files for d in UNTIL.findall(p.read_text(errors='ignore'))
+               if d < time.strftime('%Y-%m-%d')]
+    area_rules = sum(1 for p in rule_files if '.claude/rules/' in str(p))
+    if expired:
+        put('rules', 'partial', f'expired rules: {", ".join(expired[:4])}')
+    else:
+        put('rules', 'ask', f'{summary_rules} lasting rules, {area_rules} area rule files: review them with the Owner '
+            '(why each exists, contradictions, ones whose removal would change no decision)')
 
     # outside: only the Owner knows
     put('outside', 'ask', 'decisions in chats, tickets, wikis or people\'s heads: only the Owner can say')

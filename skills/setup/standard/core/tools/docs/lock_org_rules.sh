@@ -1,5 +1,5 @@
 #!/bin/sh
-# core: 0.10.0 (Kokpit repo standard; updated by /kokpit:setup, do not edit by hand)
+# core: 0.11.0 (Kokpit repo standard; updated by /kokpit:setup, do not edit by hand)
 # Protects .claude/org-rules/ (non-negotiable rules that only the Owner changes) and the project's permission rules.
 # Layers and procedure: .claude/org-rules/README.md, section "Protection and change".
 #   sh tools/docs/lock_org_rules.sh            # lock: deny/ask rules in the user settings + chmod -R a-w (main checkout)

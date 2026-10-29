@@ -8,5 +8,6 @@ Read when: you look for how something works and why. Every page has a header (`s
 
 | Page | About | Read when |
 |---|---|---|
+| [progress.md](progress.md) | where the work stands: in progress, blocked, done recently | someone asks about the state of an area, or you start work in one |
 | [decisions.md](decisions.md) | decisions and questions waiting for the Owner | you make a decision for the Owner, or have a question the code cannot answer |
 | [archive/decisions-resolved.md](archive/decisions-resolved.md) | resolved decisions, verbatim | you look for why something is the way it is |

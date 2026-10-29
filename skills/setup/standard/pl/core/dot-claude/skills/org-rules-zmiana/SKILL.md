@@ -4,7 +4,7 @@ description: Zmiana zasad niepodważalnych (.claude/org-rules/) z polecenia Wła
 disable-model-invocation: true
 argument-hint: "<co zmienić w org-rules>"
 ---
-<!-- rdzen: 0.10.0 (standard repo Kokpitu; aktualizuje /kokpit:setup) -->
+<!-- rdzen: 0.11.0 (standard repo Kokpitu; aktualizuje /kokpit:setup) -->
 
 # Zmiana org-rules
 

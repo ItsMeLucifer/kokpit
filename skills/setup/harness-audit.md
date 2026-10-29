@@ -6,7 +6,7 @@ Evidence comes from `S audit` (`setup.sh standard audit <project>`). It reports 
 
 ## The questions
 
-The first five are the fresh session test: a new session with only the repo must answer them without asking a person.
+Fourteen items. The first five are the fresh session test: a new session with only the repo must answer them without asking a person.
 
 | Item | Question | Covered when | The answer goes to |
 |---|---|---|---|
@@ -14,8 +14,10 @@ The first five are the fresh session test: a new session with only the repo must
 | `layout` | How is it organized? | every top-level directory is on the map, with a pointer to its area rule or wiki page | the "Where things are" map in `.claude/CLAUDE.md` |
 | `run` | How do I run it? | the first-run and run commands are written down and work on a clean checkout | "Stack and environment" in the project file |
 | `verify` | How do I verify it? | fixed commands for tests, lint and build, and every path in them exists | "Verification" in the project file; `tests` in `.claude/kokpit.json` |
-| `now` | Where are we now? | what is done, in progress and blocked can be read from the repo | handoff threads (`/handoff`); open choices in the decision register |
+| `now` | Where are we now? | the progress file has a line for every active area, newer than the threads | `docs/progress.md` (one line per area, linking its thread or detail page); open choices in the decision register |
+| `entry` | Is the entry a short router? | the entry with its imports stays under 200 lines and the startup budget: overview, commands, hard constraints, pointers; at most 8 lasting rules | `.claude/CLAUDE.md` and the project summary; the rest to area rules and the wiki |
 | `near-code` | Is area knowledge next to the code? | each large area has its constraints where the agent meets the code | `.claude/rules/<area>.md` with `paths:` (loaded only when working there) |
+| `rules` | Does every rule have a reason, and do none contradict? | each lasting and area rule says why it exists, temporary ones end with `(until: …)`, no two rules disagree, and none could go without changing a decision | the rule itself; removals and conflicts as register entries |
 | `outside` | What knowledge lives outside the repo? | the Owner has gone through chats, tickets, wiki pages and "things everyone knows", and what matters is written down | wherever its kind belongs (table below) |
 | `protected` | What must the agent not touch or pay for? | local data, manual work, generators and paid tools are listed | "Protected" in the project file, enforced by the lock script |
 | `pins` | Are tool and runtime versions pinned? | versions are in a pin or lock file, and the project file names them | the pin file itself; versions in "Stack and environment" |
@@ -35,6 +37,8 @@ The last items come from treating agent state like a database transaction: a cha
 3. **Interview until nothing is open.** Go through the gaps in the table's order. One topic at a time, at most three related questions in one turn, each with a concrete suggestion the Owner can accept or correct; use `AskUserQuestion` when the options are known. Ask in particular:
    - `outside`: "Which decisions about this project live outside the repo: in chats, tickets, a wiki, someone's head? Which of them would change how an agent writes code here?" Ask for each one what it is and why, not the whole history.
    - `decay`: "Is anything written here no longer true?" Name the pages and rules most likely to be stale (the oldest, those about code that changed most).
+   - `now`: "Which areas are in progress, blocked, or recently done?" Seed the progress file with one line per area, linked to its thread or page. Status notes kept elsewhere (a local file, a dedicated skill, a chat) become the detail page a line links to.
+   - `rules`: go through the lasting rules and the area rules with the Owner: why each exists (write the reason next to it), whether it is temporary (add `(until: …)`), which pairs contradict, and which could go without changing any decision. Every rule added while instructions bloat makes the important ones harder to see; a removal is as good a result as an addition.
    - `work-units`: "What does one change include (code, tests, docs)? Which command must be green before it counts as done? Do several agents ever work here at once?"
    An item is closed when its answer is written down (step 4) or the Owner says it does not apply; record that: `S audit --record <item> n/a "<reason>"`. For `outside`, `decay` and `work-units`, which the script cannot confirm, record the answer: `S audit --record <item> answered "<one line>"` (it counts for 180 days, then the question comes back). The Owner may stop at any time: then list what is still open and stop asking.
 4. **Write each answer to its one owner.** Show the text before writing it; org-rules changes follow the unlock procedure.
@@ -49,8 +53,10 @@ The last items come from treating agent state like a database transaction: a cha
    | where something is | the map in `.claude/CLAUDE.md` |
    | how something works and why | a wiki page in `docs/` and its line in `docs/README.md` |
    | a choice not settled yet | the decision register |
-   | the current state of work | a handoff thread (`/handoff`), not a new progress file |
+   | where an area stands | its line in the progress file; the details in its handoff thread or a detail page |
    | how the Owner likes to work with agents (how to ask, how much to explain, review style), or a lesson about working with them | agent memory: the repo is the record of the project, memory is the record of the person |
+
+   Every rule you write says why it exists, and a temporary one ends with `(until: YYYY-MM-DD)` or `(until: <condition>)`. Hard constraints stay at the top of the project summary, not in the middle of a long page.
 
    Project knowledge never goes only to memory: memory is not in the repo, so other sessions, worktrees, tools and people do not see it. Memory holds no copies of rules either; it may point to them.
 5. **Check.** `python3 tools/docs/check_docs.py` (zero errors, startup budget kept), then `S audit` again, then the fresh session test again with a new subagent and the same brief. Report the "before" and "after" in a few lines: covered items, and the guesses that disappeared or remain.

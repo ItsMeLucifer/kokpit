@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# core: 0.10.0 (Kokpit repo standard, GitHub module)
+# core: 0.11.0 (Kokpit repo standard, GitHub module)
 """Guard for changes to the non-negotiable rules: a PR or push touching org-rules (and the protection's own files)
 without the Owner's approval fails. Run by the workflow .github/workflows/org-rules-guard.yml.
 

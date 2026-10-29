@@ -1,7 +1,7 @@
 ---
 status: org-rules
 wersja: 1
-rdzen: 0.10.0
+rdzen: 0.11.0
 wlasciciel: Właściciel (definicja w 10-projekt.md)
 ---
 

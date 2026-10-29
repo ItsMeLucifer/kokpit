@@ -1,6 +1,6 @@
 {
   "name": "kokpit",
-  "version": "0.11.0",
+  "version": "0.12.0",
   "description": "A band above the prompt (context, usage limits, task progress, background jobs, decisions), handoffs to thread files instead of compaction, a decision register, background jobs, Economy (subagent models and effort matched to the task), workshop skills and a repo-standard setup.",
   "author": {
     "name": "Patryk Bożek",

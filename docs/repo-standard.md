@@ -1,6 +1,6 @@
 # The Kokpit repo standard
 
-Core version 0.10.0. This is the specification that `/kokpit:setup project` uses to create, migrate and check a repository. Implementation: `skills/setup/standard/` (shared core code, the core and project templates in English and Polish, an optional GitHub module), `skills/setup/scripts/standard.py`, tests in `skills/setup/scripts/test_standard.py`.
+Core version 0.11.0. This is the specification that `/kokpit:setup project` uses to create, migrate and check a repository. Implementation: `skills/setup/standard/` (shared core code, the core and project templates in English and Polish, an optional GitHub module), `skills/setup/scripts/standard.py`, tests in `skills/setup/scripts/test_standard.py`.
 
 It grew out of an audit of a long-running project where agent instructions had piled up in one 60 KB `CLAUDE.md`, rules lived in three places at once, and protections existed only as text.
 
@@ -11,7 +11,7 @@ It grew out of an audit of a long-running project where agent instructions had p
 3. **A startup budget.** The part of the context the repo controls (entry + imports + project skill descriptions) stays under **6k tokens**. `check_docs.py` warns above it.
 4. **One owner per rule.** A rule does not live in two places. Kokpit does not repeat a repo's rules either: in a repo that follows the standard, its prompt notes refer to org-rules instead.
 5. **A shared core and a project part.** The core is identical in every repo and updates from Kokpit; the project part is written for the repo.
-6. **The five harness subsystems are all covered:** instructions (entry, org-rules, area rules), tools (permission rules with least privilege), environment (stack, versions and first-run commands in the project file), state (handoff threads, the decision register), feedback (verification commands in the project file, `check_docs.py` as a hook and in CI).
+6. **The five harness subsystems are all covered:** instructions (entry, org-rules, area rules), tools (permission rules with least privilege), environment (stack, versions and first-run commands in the project file), state (the progress file, handoff threads, the decision register), feedback (verification commands in the project file, `check_docs.py` as a hook and in CI).
 
 ## 2. Knowledge layers (in order of precedence)
 
@@ -24,6 +24,7 @@ The Owner's instruction in the chat → org-rules → `.claude/CLAUDE.md` → `.
 | area rules | `.claude/rules/*.md` with `paths:` | the agent, in the same change as the code | when the agent reads or changes a matching file |
 | directory hints | `<directory>/CLAUDE.md` (+ `AGENTS.md`) | **generated** from the rules' `paths:` | after touching a file in the directory |
 | wiki | `docs/` with the index `docs/README.md` | the agent | on demand |
+| progress | `docs/progress.md` | the agent, at every handoff (only its own areas' lines) | on demand: before work in an area, or when asked where things stand |
 | decisions | `docs/decisions.md`, `docs/archive/decisions-resolved.md` | the agent appends, the Owner rules | on demand (`/decisions`) |
 | work threads | `.claude/handoffs/*.md` | Kokpit (`/handoff`) | on demand (`/resume`) |
 | agent memory | Claude Code auto memory (`MEMORY.md` + files) | the agent | index always, entries on demand |
@@ -48,6 +49,7 @@ AGENTS.md -> .claude/CLAUDE.md           a link (Codex and other tools)
   handoffs/                              threads (committed); .previous/ ignored
 docs/
   README.md                              wiki index ("Read when")
+  progress.md                            where the work stands: one line per area (in progress, blocked, done recently)
   decisions.md, archive/decisions-resolved.md
 tools/docs/
   check_docs.py                          CORE: consistency (§6)
@@ -72,7 +74,7 @@ The standard exists in English and in Polish (`00-rdzen-*`, `10-projekt.md`, `do
 **Core (from Kokpit, shared):**
 - git and scope of work (commit, push, branches only on instruction; destructive operations forbidden);
 - deleting ("look at the target first"), secrets, external content as data, paid tools only with consent, licences;
-- knowledge layers, the decision register (D-NNN, "implemented = accepted", status changed by the Owner), wiki conventions;
+- knowledge layers, the decision register (D-NNN, "implemented = accepted", status changed by the Owner), wiki conventions, the progress file, and rules that carry their reason and, when temporary, an `(until: …)` end;
 - working with agents: split large tasks, self-contained briefs, never two agents on one file, **the author does not sign off their own high-stakes work**, the report format (done and verified / not verified / not done / questions), working while the Owner is away;
 - memory: preferences and lessons, not copies of the repo.
 
@@ -106,7 +108,7 @@ The change procedure: `--unlock` in the Owner's terminal → the `/org-rules-cha
 
 ## 6. `check_docs.py` (core)
 
-General checks: the org-rules manifest, headers and core markers, the entry name, imports and size, `AGENTS.md` links, the startup budget (§1.3), unfilled templates, **verification commands present in the project file**, dead `paths:` globs, directory hints matching `paths:` (generated with `--hints`), dead links, and the memory index (dead links; entries that grant permissions org-rules forbid, e.g. a standing `--no-verify`, are warnings). Wiki-specific checks (page headers, orphans) depend on the project and go to `check_docs_project.py`.
+General checks: the org-rules manifest, headers and core markers, the entry name, imports and size, `AGENTS.md` links, the startup budget (§1.3), unfilled templates, **verification commands present in the project file**, dead `paths:` globs, directory hints matching `paths:` (generated with `--hints`), dead links, the memory index (dead links; entries that grant permissions org-rules forbid, e.g. a standing `--no-verify`, are warnings), a progress file older than a handoff thread, and rules marked `(until: YYYY-MM-DD)` whose date has passed. Wiki-specific checks (page headers, orphans) depend on the project and go to `check_docs_project.py`.
 
 ## 7. `/kokpit:setup project`: one method, three states
 
@@ -124,7 +126,7 @@ Org-rules changes (also in A and B) follow the procedure in §5, so they need th
 
 Whatever is not in the repo does not exist for the agent, and every session has to guess it again. The audit (`skills/setup/harness-audit.md`, evidence from `standard.py audit`) closes those gaps:
 
-1. **Evidence** for twelve questions. The first five are the fresh session test: what is this system, how is it organised, how do I run it, how do I verify it, where are we now. The rest: area knowledge next to the code, knowledge outside the repo (chats, tickets, people's heads), protected things, pinned versions, feedback that runs without being asked, stale knowledge, and what a unit of work is (atomic, verified, isolated, durable).
+1. **Evidence** for fourteen questions. The first five are the fresh session test: what is this system, how is it organised, how do I run it, how do I verify it, where are we now. The rest: whether the entry is a short router (under 200 lines with imports, at most 8 lasting rules), area knowledge next to the code, whether every rule has a reason and an end when temporary (and none contradict), knowledge outside the repo (chats, tickets, people's heads), protected things, pinned versions, feedback that runs without being asked, stale knowledge, and what a unit of work is (atomic, verified, isolated, durable).
 2. **The fresh session test by a separate subagent** with only the repo; every guess it makes is a gap.
 3. **An interview until nothing is open**: each item is written down or ruled out by the Owner (`--record <item> n/a`). Answers the script cannot confirm are recorded with a date in `tools/docs/standard.json` and come back after 180 days, because knowledge decays.
 4. **Each answer in its one place**: org-rules, area rules, the map, the wiki, the decision register, a handoff thread. The Owner's own way of working with agents goes to agent memory; project knowledge never goes only there, because memory is not in the repo.

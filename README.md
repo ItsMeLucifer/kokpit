@@ -20,7 +20,7 @@ Most of what decides whether an agent does good work is outside the model: the h
 | **Instructions** | the repo standard: a short `CLAUDE.md` map, org-rules split into a shared core and a project part, area rules loaded lazily by `paths:`, a startup token budget |
 | **Tools** | least-privilege permission rules generated from the project's "Protected" list; background jobs; a local model for cheap, verifiable work |
 | **Environment** | the stack, pinned versions and first-run commands recorded in the project file; a machine setup script |
-| **State** | handoff threads that grow across sessions instead of being summarised away; a decision register |
+| **State** | a progress file with one line per area, updated at every handoff; handoff threads that grow across sessions instead of being summarised away; a decision register |
 | **Feedback** | verification commands in the project file, `check_docs.py` as a hook and in CI, background test runs that report back, a rule that high-stakes work is checked by someone other than its author |
 
 Two more ideas run through it: **enforce, don't instruct** (a rule a hook or a permission enforces costs no tokens and cannot be ignored), and **measure** (Economy records every request's tokens and estimates what dynamic effort and model routing actually saved).
@@ -123,12 +123,12 @@ The **repo standard** ([docs/repo-standard.md](docs/repo-standard.md)) is one me
 
 - `.claude/CLAUDE.md` (with `AGENTS.md` in the root as a link) imports the org-rules summary and the project file;
 - org-rules are a shared core from Kokpit (`00-core-*`, updated by setup) plus the project file (`10-project.md`: owner, rules, stack and environment, verification commands, the **Protected** list);
-- `tools/docs/check_docs.py` checks the manifest, the startup budget (6k tokens), dead `paths:` globs, directory hints, links, verification commands and the agent's memory, and runs as a `PostToolUse` hook after every edit in `.claude/` and `docs/`;
+- `tools/docs/check_docs.py` checks the manifest, the startup budget (6k tokens), dead `paths:` globs, directory hints, links, verification commands, the agent's memory, a progress file older than the threads, and rules whose `(until: …)` date has passed, and runs as a `PostToolUse` hook after every edit in `.claude/` and `docs/`;
 - `tools/docs/lock_org_rules.sh` writes deny rules (editing org-rules, protected files) and ask rules (commit, push, branch switches, destructive git, paid MCP tools) to `~/.claude/settings.json`, and locks the rules with `chmod`. Only the owner removes the lock, from their own terminal.
 
 In all three states setup runs a **harness audit** ([skills/setup/harness-audit.md](skills/setup/harness-audit.md)). Whatever is not in the repo does not exist for an agent, so the audit asks what a brand-new session would have to guess:
 
-- `standard.py audit` collects the evidence for twelve questions: the fresh session test (what is this system, how is it organised, how do I run it, how do I verify it, where are we now), plus area knowledge next to the code, knowledge that lives outside the repo, protected things, pinned versions, automatic feedback, stale knowledge, and what a unit of work is;
+- `standard.py audit` collects the evidence for fourteen questions: the fresh session test (what is this system, how is it organised, how do I run it, how do I verify it, where are we now), plus whether the entry is a short router, area knowledge next to the code, whether every rule has a reason, knowledge that lives outside the repo, protected things, pinned versions, automatic feedback, stale knowledge, and what a unit of work is;
 - a separate subagent takes the fresh session test using only the repo, so the setup is not graded by its own author; every guess it has to make counts as a gap;
 - the interview goes on until every gap is written down or the owner rules it out. Each answer goes to its one place (org-rules, an area rule, the map, the wiki, the decision register), and the owner's personal way of working goes to agent memory. Answers the script cannot confirm are recorded with a date and come back after 180 days;
 - at the end the test runs again, and setup reports before and after.

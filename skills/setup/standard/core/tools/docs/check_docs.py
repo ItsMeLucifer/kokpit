@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# core: 0.10.0 (Kokpit repo standard; updated by /kokpit:setup, do not edit by hand)
+# core: 0.11.0 (Kokpit repo standard; updated by /kokpit:setup, do not edit by hand)
 """Consistency of project knowledge and agent rules (standard library only, about 1 s).
 
     python3 tools/docs/check_docs.py                  # check everything, exit 1 on errors
@@ -18,7 +18,9 @@ Checks (rules: the core knowledge file in .claude/org-rules/; parameters: tools/
   6. directory hints (<directory>/CLAUDE.md marked "generated") consistent with `paths:`;
   7. dead markdown links and `docs/…`, `.claude/…` paths in backticks;
   8. agent memory (this machine's MEMORY.md): dead links, entries granting permissions org-rules forbid (warnings);
-  9. project checks: tools/docs/check_docs_project.py with sprawdz/check(root, files) -> (errors, warnings).
+  9. project checks: tools/docs/check_docs_project.py with sprawdz/check(root, files) -> (errors, warnings);
+ 10. the progress file (docs/progress.md) older than a handoff thread, and rules marked `(until: YYYY-MM-DD)`
+     whose date has passed (warnings).
 
 Repos that follow the Polish variant of the standard (00-rdzen-*, 10-projekt.md, `rdzen:`, `wersja:`,
 ```kokpit-nietykalne```) are checked the same way.
@@ -30,6 +32,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
 ORG = os.path.join(ROOT, ".claude", "org-rules")
@@ -485,6 +488,46 @@ def check_project(files):
     warnings.extend(found_warnings)
 
 
+# --- 10. progress and expiring rules ----------------------------------------------------------------
+
+PROGRESS_FILES = ("docs/progress.md", "docs/postep.md")
+UNTIL = re.compile(r"\((?:until|do):\s*(\d{4}-\d{2}-\d{2})\)")
+
+
+def check_progress():
+    """The progress file is older than a thread changed since: a handoff skipped its line."""
+    rel = next((p for p in PROGRESS_FILES if os.path.exists(os.path.join(ROOT, p))), None)
+    if not rel:
+        return
+    updated = (field(frontmatter(read(rel)), "updated", "zaktualizowano") or "")[:10]
+    if not re.match(r"\d{4}-\d{2}-\d{2}$", updated):
+        warnings.append(f"{rel}: no `updated:` date in the header")
+        return
+    directory = os.path.join(ROOT, ".claude", "handoffs")
+    newer = []
+    for name in sorted(os.listdir(directory)) if os.path.isdir(directory) else []:
+        if not name.endswith(".md") or name.endswith((".archive.md", ".archiwum.md")):
+            continue
+        thread = (field(frontmatter(read(f".claude/handoffs/{name}")), "updated", "zaktualizowano") or "")[:10]
+        if thread > updated:
+            newer.append(name[:-3])
+    if newer:
+        warnings.append(f"{rel}: updated {updated}, but these threads changed later: {', '.join(newer[:5])} "
+                        "(their lines are probably out of date)")
+
+
+def check_expiry(files):
+    """Rules marked `(until: YYYY-MM-DD)` whose date has passed."""
+    today = time.strftime("%Y-%m-%d")
+    for rel in files:
+        if not rel.endswith(".md") or not (rel.startswith((".claude/org-rules/", ".claude/rules/")) or rel == ENTRY):
+            continue
+        for number, line in enumerate(read(rel).splitlines(), 1):
+            for date in UNTIL.findall(line):
+                if date < today:
+                    warnings.append(f"{rel}:{number}: the rule expired on {date}: remove it or give it a new date")
+
+
 # --- entry point -------------------------------------------------------------------------------------
 
 def concerns(event):
@@ -521,6 +564,8 @@ def main():
     check_links(files, c, local)
     if not hook:
         check_memory()
+        check_progress()
+        check_expiry(files)
     check_project(files)
     if hook:
         important = [t for kind, t in errors if kind != "template"]
