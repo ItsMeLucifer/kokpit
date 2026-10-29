@@ -501,6 +501,18 @@ export function housekeepingNote(text: string): string[] | null {
   return titles.length > 0 ? titles : null
 }
 
+/**
+ * The thread named by the handoff skill's mark ("Kokpit · handoff saved: <thread>" as the first line of the
+ * answer), or null. The mark also counts when the thread was already up to date and the file did not change.
+ */
+export function savedMark(answer: string): string | null {
+  const first = answer.trimStart().split('\n', 1)[0] ?? ''
+  const m = first.match(/^\**Kokpit · handoff saved:\**\s*`?([^`\s]+)/)
+  if (!m || !m[1]) return null
+  const name = (m[1].split('/').pop() ?? '').replace(/\.md$/, '')
+  return name || null
+}
+
 /** Note for the model attached to a message carried into the new session. */
 export function previousContext(markdown: string): string {
   return (
@@ -1036,7 +1048,7 @@ export function pickSaved(files: { path: string; mtimeMs: number }[], since: num
  * End of a turn during a handoff: a thread file saved since the start → done; nothing saved → drop "Writing".
  * It does not rely on catching a specific Write/Edit (relative path, a write from Bash, another surface).
  */
-async function finishHandoff($: EngineInterface, aborted: boolean): Promise<void> {
+async function finishHandoff($: EngineInterface, aborted: boolean, answer: string): Promise<void> {
   const h = await read($, handoffAtom)
   if (!h.running) return
   let files: { path: string; mtimeMs: number }[] = []
@@ -1048,6 +1060,13 @@ async function finishHandoff($: EngineInterface, aborted: boolean): Promise<void
   const saved = pickSaved(files, h.startedAt)
   if (saved) {
     await noteSaved($, saved)
+    return
+  }
+  // The skill confirmed a thread whose file did not change (already up to date, or written in another
+  // checkout such as a worktree): still a finished handoff, so the band must not offer another one.
+  const marked = aborted ? null : savedMark(answer)
+  if (marked) {
+    await noteSaved($, (await inProject($, HANDOFF_DIR)) + '/' + marked + '.md')
     return
   }
   await update($, handoffAtom, x => ({ ...x, running: false, clearAfter: false }))
@@ -2082,7 +2101,7 @@ export const register: Register = (on, options) => {
     await flushEconomyStats($).catch(() => {})
     // The turn in which a handoff was written always closes it, also when aborted or without a save.
     const wasRunning = (await read($, handoffAtom)).running
-    if (wasRunning) await finishHandoff($, e.isAborted)
+    if (wasRunning) await finishHandoff($, e.isAborted, e.answer ?? '')
     else if (!e.isAborted) {
       // Answers to keep on clearing (handoff turns excluded) and whether the turn ended with a question.
       const answer = (e.answer ?? '').trim()

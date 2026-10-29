@@ -20,6 +20,7 @@ import {
   isThreadFile,
   orphanKeys,
   pickSaved,
+  savedMark,
   previousContext,
   progress,
   resetLabel,
@@ -550,6 +551,20 @@ for (const surface of SURFACES) {
     const drawn = JSON.stringify(await ui.drawn())
     expect(drawn).not.toContain('Writing the handoff')
     expect(drawn).toContain('tests-coverage')
+  })
+
+  test(`${surface}: a handoff of an up-to-date thread counts as saved (no new offer)`, async ($, on) => {
+    engine(on, [])
+    const files: Record<string, number> = { 'easter-eggs.md': Date.parse('2026-10-13T09:00:00Z') }
+    threads(on, files)
+    await $.session.measure(measure(160_000))
+    const ui = await $.ui.mount({ plugin: 'kokpit', surface, component: 'AbovePrompt', props: PROPS })
+    expect(await ui.find({ key: 'kokpit-handoff' })).toBeDefined()
+    await $.skill.prompt({ skill: 'kokpit:handoff', text: '' })
+    await $.turn.complete({ ...TURN_END, answer: 'Kokpit · handoff saved: easter-eggs\n\nThe thread was already up to date.' })
+    const drawn = JSON.stringify(await ui.drawn())
+    expect(drawn).toContain('✓ Thread \\"easter-eggs\\" saved')
+    expect(await ui.find({ key: 'kokpit-handoff' })).toBeUndefined()
   })
 
   test(`${surface}: stale thread: "Clear and resume" refreshes the handoff first`, async ($, on) => {
@@ -1157,6 +1172,9 @@ test('a note about a side session housekeeping turn', () => {
     housekeepingNote(note('A', 'Kokpit · handoff saved: a') + '\n' + note('B', 'Done, PR opened.')),
   ).toBeNull()
   expect(housekeepingNote('Kokpit · handoff saved: an ordinary message')).toBeNull()
+  expect(savedMark('Kokpit · handoff saved: easter-eggi-nawiazania\n\nWątek…')).toBe('easter-eggi-nawiazania')
+  expect(savedMark('**Kokpit · handoff saved:** `.claude/handoffs/ui-cards.md`')).toBe('ui-cards')
+  expect(savedMark('Done.\nKokpit · handoff saved: x')).toBeNull()
 })
 
 test('the parent session skips a note about a side session handoff, other notes pass', async ($, on) => {
