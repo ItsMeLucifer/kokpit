@@ -1,6 +1,6 @@
 ---
 status: org-rules
-wersja: 1
+wersja: 2
 rdzen: 0.11.0
 wlasciciel: Właściciel (definicja w 10-projekt.md)
 ---
@@ -12,8 +12,8 @@ Czytaj, gdy: zamierzasz coś usunąć, przenieść, zacommitować, wypchnąć, u
 ## Git i zakres pracy
 
 1. Pracujesz **we własnym worktree i tylko w swoim zakresie plików**. Równoległe sesje mają w repo własne, niezatwierdzone zmiany.
-2. **Commit, push i zmiana gałęzi tylko na polecenie Właściciela.** Zgoda na jeden commit nie rozciąga się na następne.
-3. Bez polecenia nigdy: `push --force`, `reset --hard`, `clean -fd`, `checkout`/`restore` całego repo, `stash` bez unikalnej etykiety, `--no-verify`, usuwanie gałęzi i tagów.
+2. **Commit, scalenie i push robisz sam, bez pytania**, gdy kawałek pracy jest skończony i sprawdzony. To stała zgoda Właściciela: historia gita pozwala wszystko cofnąć. Commitujesz tylko swoje pliki, podane ścieżkami, a nie `git add -A`, gdy w drzewie są cudze zmiany. Gałęzi głównego checkoutu nie przełączasz, bo pracują w nim inne sesje.
+3. Bez polecenia nigdy: `push --force`, `reset --hard`, `clean -fd`, `checkout`/`restore` całego repo, `stash` bez unikalnej etykiety, `--no-verify`, usuwanie niescalonych gałęzi (`branch -D`) i tagów.
 4. Cofasz zmiany **celowanym** `git checkout -- <ścieżki>`, nigdy na całym repo.
 5. Przed usunięciem albo nadpisaniem **obejrzyj cel**. Usuwasz tylko to, co (a) zostało wchłonięte do wiki albo reguł, (b) da się odtworzyć z kodu lub skryptu, albo (c) jest odrzuconą propozycją. Plik wersjonowany odzyskasz z historii gita, niewersjonowanego nigdy.
 

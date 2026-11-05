@@ -1,6 +1,6 @@
 ---
 status: org-rules
-version: 1
+version: 2
 core: 0.11.0
 owner: Owner (defined in 10-project.md)
 ---
@@ -12,8 +12,8 @@ Read when: you are about to delete, move, commit or push something, run a genera
 ## Git and scope
 
 1. You work **in your own worktree and only within your own set of files**. Parallel sessions have their own uncommitted changes in the repo.
-2. **Commit, push and branch switches only on the Owner's instruction.** Consent to one commit does not extend to the next.
-3. Never without an instruction: `push --force`, `reset --hard`, `clean -fd`, `checkout`/`restore` of the whole repo, `stash` without a unique label, `--no-verify`, deleting branches and tags.
+2. **You commit, merge and push yourself, without asking**, once a piece of work is finished and verified. This is the Owner's standing consent: git history lets everything be undone. You commit only your own files, named by path, not `git add -A` when the tree holds other people's changes. You do not switch branches in the main checkout, because other sessions work there.
+3. Never without an instruction: `push --force`, `reset --hard`, `clean -fd`, `checkout`/`restore` of the whole repo, `stash` without a unique label, `--no-verify`, deleting unmerged branches (`branch -D`) and tags.
 4. You revert changes with a **targeted** `git checkout -- <paths>`, never on the whole repo.
 5. Before deleting or overwriting, **look at the target**. You delete only what (a) has been absorbed into the wiki or rules, (b) can be rebuilt from code or a script, or (c) is a rejected proposal. A versioned file comes back from git history; an unversioned one never does.
 

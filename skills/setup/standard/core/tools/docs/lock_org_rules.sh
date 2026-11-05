@@ -9,7 +9,8 @@
 # The rules live in the Owner's ~/.claude/settings.json (outside the repo, so the agent cannot change them with the code):
 #   EDIT     deny: editing org-rules, the lock and check_docs.py, recomputing the manifest (removed by --unlock);
 #   FIXED    deny: Bash commands writing org-rules, --unlock itself, the approval label (always stay);
-#   GIT      ask:  destructive and committing git operations (commit, push, branch switch, reset, clean, --no-verify);
+#   GIT      ask:  destructive git operations (force push, reset --hard, clean, unmerged branch delete, stash drop,
+#                  --no-verify); commit, merge and plain push go without a prompt (00 security, rule 2);
 #   PROJECT  deny/ask from the "Protected" section of .claude/org-rules/10-project.md (absolute paths of this repo).
 # The project rules the script added are remembered in ~/.claude/kokpit/standard/<repo>.json, so a changed list
 # removes only its own entries. chmod applies only in the main checkout: in a worktree a read-only directory would
@@ -42,8 +43,8 @@ FIXED = [
     "Bash(*lock_org_rules.sh*--unlock*)", "Bash(*org-rules-ok*)",
 ]
 GIT = [
-    "Bash(git commit *)", "Bash(git push *)", "Bash(git push)", "Bash(git switch *)", "Bash(git checkout -b *)",
-    "Bash(git reset --hard*)", "Bash(git clean *)", "Bash(git branch -D *)", "Bash(git branch -d *)",
+    "Bash(git push --force*)", "Bash(git push * --force*)", "Bash(git push -f*)", "Bash(git push * -f*)",
+    "Bash(git reset --hard*)", "Bash(git clean *)", "Bash(git branch -D *)",
     "Bash(git stash drop*)", "Bash(git stash clear*)", "Bash(* --no-verify*)", "Edit(~/.claude/settings.json)",
 ]
 KINDS = {"data": "data", "dane": "data", "manual": "manual", "reczne": "manual",

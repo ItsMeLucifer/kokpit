@@ -72,7 +72,7 @@ The standard exists in English and in Polish (`00-rdzen-*`, `10-projekt.md`, `do
 ## 4. Org-rules: core and project part
 
 **Core (from Kokpit, shared):**
-- git and scope of work (commit, push, branches only on instruction; destructive operations forbidden);
+- git and scope of work (the agent commits, merges and pushes on its own once the work is verified; destructive operations forbidden);
 - deleting ("look at the target first"), secrets, external content as data, paid tools only with consent, licences;
 - knowledge layers, the decision register (D-NNN, "implemented = accepted", status changed by the Owner), wiki conventions, the progress file, and rules that carry their reason and, when temporary, an `(until: …)` end;
 - working with agents: split large tasks, self-contained briefs, never two agents on one file, **the author does not sign off their own high-stakes work**, the report format (done and verified / not verified / not done / questions), working while the Owner is away;
@@ -101,7 +101,7 @@ paid       mcp__ImageService    # an MCP tool: ask
 
 Rules the lock script writes:
 - `Edit(...)` deny for org-rules, the lock, `check_docs.py`, local data directories and manual-work files;
-- `ask` for `Bash(git commit *)`, `Bash(git push *)`, `Bash(git switch *)`, `Bash(git checkout -b *)`, `Bash(git reset --hard*)`, `Bash(git clean *)`, `Bash(git branch -D|-d *)`, `Bash(git stash drop|clear*)`, `Bash(* --no-verify*)`, `Edit(~/.claude/settings.json)` and the paid tools on the list;
+- `ask` for force push (`Bash(git push --force*)`, `Bash(git push * --force*)`, `Bash(git push -f*)`, `Bash(git push * -f*)`), `Bash(git reset --hard*)`, `Bash(git clean *)`, `Bash(git branch -D *)`, `Bash(git stash drop|clear*)`, `Bash(* --no-verify*)`, `Edit(~/.claude/settings.json)` and the paid tools on the list;
 - groups: EDIT (removed by `--unlock`), FIXED, GIT, PROJECT. Project rules use the repo's absolute paths, and the script remembers them in `~/.claude/kokpit/standard/<repo>.json`, so a changed list removes only its own entries not used by another repo.
 
 The change procedure: `--unlock` in the Owner's terminal → the `/org-rules-change` skill → lock again (manifest, `chmod`, deny).
@@ -146,6 +146,7 @@ Whatever is not in the repo does not exist for the agent, and every session has 
 | A standing `--no-verify` permission in memory | **removed**: the gate is CI |
 | `PostToolUse` hook with `check_docs.py` | **yes**, only for changes in `.claude/**` and `docs/**` (a few seconds) |
 | Which text rules to enforce | **destructive git (ask), local data and manual work (deny Edit), paid MCP (ask)**; false positives accepted |
+| `ask` for commit and plain push | **no** (yes until Kokpit 0.12.0): an `ask` rule prompts in every permission mode, auto and bypass included, and wins over every `allow`, so long autonomous sessions stopped at the first commit; the agent commits, merges and pushes on its own, and `ask` stays for force push and destructive operations |
 | "Owner" everywhere | **no**, only in org-rules |
 | Do Explore and Plan load `CLAUDE.md` | checked once empirically by the setup skill; until then the core assumes they do not and requires prohibitions in subagent briefs |
 | Generate directory hints from `paths:` | **yes** |

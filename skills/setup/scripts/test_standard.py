@@ -121,7 +121,10 @@ class Standard(unittest.TestCase):
                 self.assertIn(f'Edit(/{root}/art_work/**)', rules['deny'])
                 self.assertIn(f'Edit(/{root}/docs/story.md)', rules['deny'])
                 self.assertIn('mcp__Expensive', rules['ask'])
-                self.assertIn('Bash(git push *)', rules['ask'])
+                self.assertIn('Bash(git push --force*)', rules['ask'])
+                # an ask rule prompts in every mode (auto, bypass), so commit and plain push stay without one
+                self.assertNotIn('Bash(git commit *)', rules['ask'])
+                self.assertNotIn('Bash(git push *)', rules['ask'])
                 self.assertFalse((self.repo / '.claude/org-rules/README.md').stat().st_mode & 0o222)
                 status = run('sh', 'tools/docs/lock_org_rules.sh', '--status', cwd=self.repo, env=self.env)
                 self.assertEqual(status.returncode, 0, status.stdout)
