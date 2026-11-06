@@ -84,7 +84,7 @@ The standard exists in English and in Polish (`00-rdzen-*`, `10-projekt.md`, `do
 ```kokpit-protected
 data       art_work/            # local data outside git: Edit deny, rm/mv ask
 manual     docs/story.md        # the Owner's manual work: Edit deny (also in .claude/worktrees/*)
-generator  tools/gen_ui.py      # running it asks
+generator  tools/gen_ui.py      # running it asks (grep, sed, ls of it do not)
 paid       mcp__ImageService    # an MCP tool: ask
 ```
 ````
@@ -101,7 +101,7 @@ paid       mcp__ImageService    # an MCP tool: ask
 
 Rules the lock script writes:
 - `Edit(...)` deny for org-rules, the lock, `check_docs.py`, local data directories and manual-work files;
-- `ask` for force push (`Bash(git push --force*)`, `Bash(git push * --force*)`, `Bash(git push -f*)`, `Bash(git push * -f*)`), `Bash(git reset --hard*)`, `Bash(git clean *)`, `Bash(git branch -D *)`, `Bash(git stash drop|clear*)`, `Bash(* --no-verify*)`, `Edit(~/.claude/settings.json)` and the paid tools on the list;
+- `ask` for force push (`Bash(git push --force*)`, `Bash(git push * --force*)`, `Bash(git push -f*)`, `Bash(git push * -f*)`), `Bash(git reset --hard*)`, `Bash(git clean *)`, `Bash(git branch -D *)`, `Bash(git stash drop|clear*)`, `Bash(* --no-verify*)`, `Edit(~/.claude/settings.json)` and the paid tools on the list; for a generator only `Bash(python* *<name>*)` and `Bash(*lender *<name>*)`, because an `ask` prompts in every mode and a broad `Bash(*<name>*)` also stopped read-only commands that merely name the file (list a generator only when git cannot restore what it overwrites);
 - groups: EDIT (removed by `--unlock`), FIXED, GIT, PROJECT. Project rules use the repo's absolute paths, and the script remembers them in `~/.claude/kokpit/standard/<repo>.json`, so a changed list removes only its own entries not used by another repo.
 
 The change procedure: `--unlock` in the Owner's terminal → the `/org-rules-change` skill → lock again (manifest, `chmod`, deny).

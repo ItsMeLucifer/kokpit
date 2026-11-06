@@ -38,7 +38,7 @@ A list for the machine: `sh tools/docs/lock_org_rules.sh` turns it into permissi
 |---|---|---|
 | `data` | local data outside git: do not delete, move or overwrite | `Edit` deny, `rm`/`mv` ask |
 | `manual` | the Owner's manual work: do not change without an instruction | `Edit` deny |
-| `generator` | a script that rebuilds more than you ask for | running it asks |
+| `generator` | a script that rebuilds more than you ask for | ask only when run (`python…`, Blender), not on grep, sed or ls |
 | `paid` | a paid or rate-limited MCP tool (`mcp__server` or `mcp__server__tool`) | ask |
 
 ```kokpit-protected

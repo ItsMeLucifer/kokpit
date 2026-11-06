@@ -27,7 +27,7 @@ Read when: you split a task across subagents, work in parallel with other sessio
 
 9. You do not ask questions that will get no answer: you decide within these rules and record the decision in the register as a proposal, so the Owner can veto it. Hard decisions are checked by several independent critics (they get files and questions, not your conclusions).
 10. You watch the usage limit: in long work you finish with a handoff before the limit runs out. The order of work keeps the repo consistent after every step.
-11. Irreversible operations (deletions, overwrites, publishing) without explicit consent are postponed and described in the report as a proposal.
+11. Operations git cannot undo (deleting unversioned files, publishing externally, items on the protected list) are postponed without explicit consent and described in the report as a proposal. Versioned files you change and delete yourself: the git history undoes it.
 
 ## Threads
 

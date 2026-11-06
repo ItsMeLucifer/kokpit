@@ -78,7 +78,10 @@ def project_rules():
         elif kind == "manual":
             deny += [f"Edit(/{root}/{pattern})", f"Edit(/{root}/.claude/worktrees/*/{pattern})"]
         elif kind == "generator":
-            ask.append(f"Bash(*{os.path.basename(rel)}*)")
+            # ask only when the script is run (python / Blender), not on grep, sed or ls of it: an ask rule
+            # prompts in every mode, so a broad pattern stops read-only commands that merely name the file
+            base = os.path.basename(rel)
+            ask += [f"Bash(python* *{base}*)", f"Bash(*lender *{base}*)"]
         else:
             ask.append(target)
     return list(dict.fromkeys(deny)), list(dict.fromkeys(ask))

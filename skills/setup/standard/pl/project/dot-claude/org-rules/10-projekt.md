@@ -38,7 +38,7 @@ Lista dla maszyny: z niej `sh tools/docs/lock_org_rules.sh` generuje reguły upr
 |---|---|---|
 | `dane` | dane lokalne poza gitem: nie usuwasz, nie przenosisz, nie nadpisujesz | `Edit` deny, `rm`/`mv` ask |
 | `reczne` | ręczna praca Właściciela: nie zmieniasz bez polecenia | `Edit` deny |
-| `generator` | skrypt przebudowujący więcej, niż prosisz | uruchomienie ask |
+| `generator` | skrypt przebudowujący więcej, niż prosisz | ask tylko przy uruchomieniu (`python…`, Blender), nie przy grep, sed, ls |
 | `platne` | narzędzie MCP płatne lub limitowane (`mcp__serwer` albo `mcp__serwer__narzędzie`) | ask |
 
 ```kokpit-nietykalne

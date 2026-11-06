@@ -16,7 +16,7 @@ FILL = {
         'pairs': [('1. {{RULE}}', '1. A rule.'), ('{{ENVIRONMENT}}', 'Python 3.12 (.python-version).'),
                   ('{{VERIFICATION}}', 'pytest'), ('{{INDEX}}', '')],
         'protected': '{{PROTECTED}}',
-        'items': 'data art_work/\nmanual docs/story.md\npaid mcp__Expensive',
+        'items': 'data art_work/\nmanual docs/story.md\ngenerator tools/gen_ui.py\npaid mcp__Expensive',
         'manual': 'docs/story.md',
         'entry': [('{{MAP}}', ''), ('{{DESCRIPTION}}', 'A test.')],
     },
@@ -25,7 +25,7 @@ FILL = {
         'pairs': [('1. {{ZASADA}}', '1. Zasada.'), ('{{SRODOWISKO}}', 'Python 3.12.'),
                   ('{{WERYFIKACJA}}', 'pytest'), ('{{SPIS}}', '')],
         'protected': '{{NIETYKALNE}}',
-        'items': 'dane art_work/\nreczne docs/story.md\nplatne mcp__Expensive',
+        'items': 'dane art_work/\nreczne docs/story.md\ngenerator tools/gen_ui.py\nplatne mcp__Expensive',
         'manual': 'docs/story.md',
         'entry': [('{{MAPA}}', ''), ('{{OPIS}}', 'Test.')],
     },
@@ -125,6 +125,10 @@ class Standard(unittest.TestCase):
                 # an ask rule prompts in every mode (auto, bypass), so commit and plain push stay without one
                 self.assertNotIn('Bash(git commit *)', rules['ask'])
                 self.assertNotIn('Bash(git push *)', rules['ask'])
+                # a generator asks only when run, not on grep, sed or ls of the file
+                self.assertIn('Bash(python* *gen_ui.py*)', rules['ask'])
+                self.assertIn('Bash(*lender *gen_ui.py*)', rules['ask'])
+                self.assertNotIn('Bash(*gen_ui.py*)', rules['ask'])
                 self.assertFalse((self.repo / '.claude/org-rules/README.md').stat().st_mode & 0o222)
                 status = run('sh', 'tools/docs/lock_org_rules.sh', '--status', cwd=self.repo, env=self.env)
                 self.assertEqual(status.returncode, 0, status.stdout)

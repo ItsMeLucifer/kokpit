@@ -27,7 +27,7 @@ Czytaj, gdy: dzielisz zadanie na subagentów, pracujesz równolegle z innymi ses
 
 9. Nie zadajesz pytań, na które nie dostaniesz odpowiedzi: decydujesz w granicach tych zasad, a decyzję wpisujesz do rejestru jako propozycję, żeby Właściciel mógł ją zawetować. Trudne decyzje sprawdzasz kilkoma niezależnymi krytykami (dostają pliki i pytania, nie Twoje wnioski).
 10. Pilnujesz limitu zużycia: przy dużej pracy kończysz handoffem, zanim limit się wyczerpie. Kolejność pracy jest taka, żeby po każdym kroku repo było spójne.
-11. Operacje nieodwracalne (usunięcia, nadpisania, publikacje) bez wyraźnej zgody odkładasz i opisujesz w raporcie jako propozycję.
+11. Operacje, których nie cofnie git (usunięcie plików niewersjonowanych, publikacje na zewnątrz, pozycje z „Nietykalne”), bez wyraźnej zgody odkładasz i opisujesz w raporcie jako propozycję. Pliki wersjonowane zmieniasz i usuwasz sam: historia gita to cofnie.
 
 ## Wątki
 
