@@ -88,7 +88,7 @@ Progress shows in the band (`⧗ tests camp · 1:23 · 14/52 ✓ · 1 ✗`, with
 
 Per-project settings (shared by all worktrees of the repo) in `/kokpit` → Economy. They take effect in a new conversation or after `/clear`, because changing the system prompt mid-conversation would re-read the whole conversation.
 
-- **Split across subagents.** For a large task Claude splits the work and sets `model` and `effort` for every subagent from a rubric: Opus for design and unknown bugs, Sonnet for precisely described work, Haiku only in three narrow roles whose output is cheap to verify: **Explore**, **kokpit:reporter** (runs commands and reports output verbatim) and **kokpit:mechanic** (a pattern-driven change with a check, which stops instead of guessing). Both Kokpit agents end with `DONE` or `ABORTED: reason`. A Haiku request outside these roles becomes Sonnet; a failed tool call raises a subagent's effort one level.
+- **Split across subagents.** For a large task Claude splits the work and sets `model` and `effort` for every subagent from a rubric: Opus for design and unknown bugs, Sonnet for precisely described work (on a Sonnet conversation subagents stay on Sonnet and Opus is only an advisor for a single hard question, because an Opus subagent costs twice the conversation's model), Haiku only in three narrow roles whose output is cheap to verify: **Explore**, **kokpit:reporter** (runs commands and reports output verbatim) and **kokpit:mechanic** (a pattern-driven change with a check, which stops instead of guessing). Both Kokpit agents end with `DONE` or `ABORTED: reason`. A Haiku request outside these roles becomes Sonnet; a failed tool call raises a subagent's effort one level.
 - **Dynamic effort.** For every new request Claude rates the difficulty with the `effort_rating` tool, in parallel with its first tool call: simple → the floor (medium by default), medium → high, hard → the ceiling (xhigh by default, which may be above the session setting). A failed tool call raises it one level; plan mode stays at the ceiling. Only on models where an effort change keeps the prompt cache (Opus/Sonnet/Haiku 5.5, Fable 5.1).
 - **Local model.** Optional: a model from `ollama list` gets a `local_model` tool for summaries, drafts and pattern-driven code changes (through opencode in a separate worktree, returned as a diff to review).
 - **Stats.** Pick your plan (**Pro · Max x5 · Max x20**) and see the savings as a share of the weekly limit (a range), in API dollars, for dynamic effort and subagents separately. Tokens are measured for every request; two things are estimates: how much more thinking a step at the highest level would have produced (ranges, from raw tokens kept so the ranges can change), and the no-Economy scenario for subagents. The weekly share comes from a per-plan calibration: the measured cost of all requests against the rise of the weekly counter.
@@ -180,7 +180,7 @@ Writing and editing `.claude/handoffs/*.md` is approved automatically (only `.md
 ## Development
 
 ```
-claude plugin test .                               # mod tests (123)
+claude plugin test .                               # mod tests (126)
 python3 skills/setup/scripts/test_standard.py      # repo-standard scripts
 claude plugin validate .
 ```

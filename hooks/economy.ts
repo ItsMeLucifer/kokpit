@@ -232,14 +232,32 @@ export const EFFORT_NOTE =
   'the higher one. If the work turns out harder, call it again with a higher rating. If you answer directly ' +
   'without tools, do not call it at all.'
 
-/** Model rubric and how far to trust reports: part of Kokpit in every repo. */
-const SPLIT_RUBRIC =
-  'The user explicitly asks you to set the model and effort parameters for EVERY subagent according to this ' +
-  'rubric: • opus + high — design, a bug with an unknown cause, cross-cutting changes, subtle domain logic, ' +
+const RUBRIC_HEAD =
+  'The user explicitly asks you to set the model and effort parameters for EVERY subagent according to this rubric: '
+
+/** Default tiers: the conversation runs on a model at least as expensive as Opus. */
+const RUBRIC_TIERS =
+  '• opus + high — design, a bug with an unknown cause, cross-cutting changes, subtle domain logic, ' +
   'anything unclear; opus + xhigh — only when a mistake would be expensive or hard to undo; ' +
   '• sonnet + high — a precisely described function in one module, with tests; ' +
   '• sonnet + medium — mechanical changes following a given pattern, running tests and reporting, documentation ' +
+  'from provided content; '
+
+/**
+ * Tiers for a conversation on Sonnet: the user picked the cheaper model to save the limit, so an Opus
+ * subagent (twice the price for the same tokens) is an exception, not the default for design work.
+ */
+const RUBRIC_TIERS_SONNET =
+  'this conversation runs on Sonnet to save the usage limit, so subagents stay on Sonnet too: ' +
+  '• sonnet + high — design, a bug with an unknown cause, cross-cutting changes, subtle domain logic, ' +
+  'anything unclear, a precisely described function in one module, with tests; ' +
+  '• sonnet + medium — mechanical changes following a given pattern, running tests and reporting, documentation ' +
   'from provided content; ' +
+  '• opus + high — an exception, only as an advisor at a key moment (a decision that is expensive or hard to ' +
+  'undo, a bug that two attempts did not find): ask one focused question and paste the relevant excerpts, so ' +
+  'it answers instead of exploring the repo; never for implementation; '
+
+const RUBRIC_TAIL =
   '• haiku — only three subagent types, each with a narrow scope: Explore (find files, symbols, usages — low; ' +
   'trace a flow across a few files and summarize — medium), kokpit:reporter (run the given commands: tests, ' +
   'build, a short benchmark, and report the output verbatim — low), kokpit:mechanic (a change fully described ' +
@@ -250,21 +268,29 @@ const SPLIT_RUBRIC =
   'what you touch next anyway; use paths from Explore directly and search again only when one proves wrong. ' +
   'ABORTED or a failing check → do it yourself or via sonnet, never retry on haiku. '
 
-export const SPLIT_NOTE =
-  'Kokpit (work split): for a large task (many files or independent parts, more than a dozen or so steps) ' +
-  'start by breaking it into subtasks and delegate independent parts to subagents (the Agent tool), in parallel ' +
-  'where independent. Keep integration, design decisions and the final verification in the main conversation. ' +
-  SPLIT_RUBRIC +
-  'Do not delegate trivia (up to ~3 steps): a subagent reads the files again from scratch, so it costs more. ' +
-  'A subagent prompt must be self-contained (files, goal, acceptance criteria, "do not ask, decide and ' +
-  'explain"), because it does not see this conversation. Two subagents must never edit the same file in parallel.'
+/** Model rubric and how far to trust reports: part of Kokpit in every repo. Depends on the conversation's model. */
+export function splitRubric(mainModel = ''): string {
+  return RUBRIC_HEAD + (/sonnet/.test(mainModel) ? RUBRIC_TIERS_SONNET : RUBRIC_TIERS) + RUBRIC_TAIL
+}
+
+export function splitNote(mainModel = ''): string {
+  return (
+    'Kokpit (work split): for a large task (many files or independent parts, more than a dozen or so steps) ' +
+    'start by breaking it into subtasks and delegate independent parts to subagents (the Agent tool), in parallel ' +
+    'where independent. Keep integration, design decisions and the final verification in the main conversation. ' +
+    splitRubric(mainModel) +
+    'Do not delegate trivia (up to ~3 steps): a subagent reads the files again from scratch, so it costs more. ' +
+    'A subagent prompt must be self-contained (files, goal, acceptance criteria, "do not ask, decide and ' +
+    'explain"), because it does not see this conversation. Two subagents must never edit the same file in parallel.'
+  )
+}
 
 /** In a repo that follows the Kokpit repo standard, the delegation rules belong to org-rules; here only the rubric. */
-export function splitNoteStandard(rulesFile: string): string {
+export function splitNoteStandard(rulesFile: string, mainModel = ''): string {
   return (
     `Kokpit (work split): the rules for splitting and delegating work and for subagent briefs are in org-rules ` +
     `(${rulesFile}). ` +
-    SPLIT_RUBRIC.trimEnd()
+    splitRubric(mainModel).trimEnd()
   )
 }
 

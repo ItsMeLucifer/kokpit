@@ -39,7 +39,7 @@ import {
   PLAN_NAME,
   RATINGS,
   RATING_TOOL,
-  SPLIT_NOTE,
+  splitNote,
   calibrationAddCost,
   calibrationReading,
   compact,
@@ -1527,7 +1527,7 @@ export const register: Register = (on, options) => {
     ]
     const eco = (await read($, economyAtom)).active
     if (eco.split) {
-      const text = standard ? splitNoteStandard(standard.agents.split('/').pop() ?? '') : SPLIT_NOTE
+      const text = standard ? splitNoteStandard(standard.agents.split('/').pop() ?? '', e.model) : splitNote(e.model)
       extra.push({ id: 'kokpit-split', text, scope: 'session' as const })
     }
     if (eco.effort) extra.push({ id: 'kokpit-effort', text: EFFORT_NOTE, scope: 'session' as const })

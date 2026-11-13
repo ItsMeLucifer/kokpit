@@ -293,6 +293,23 @@ for (const [core, agentsFile, knowledgeFile] of [
   })
 }
 
+test('split: on a Sonnet conversation the rubric keeps subagents on Sonnet and leaves Opus as an advisor', async ($, on) => {
+  const mem: Record<string, unknown> = { 'economy:/p': { split: true, effort: false, floor: 'medium' } }
+  engine(on, mem, [])
+  on('prompt.compose', async () => ({ sections: [] }))
+  await $.session.start({ cwd: '/p' } as never)
+  const sonnet = JSON.stringify(await $.prompt.compose({ ...(COMPOSE as object), model: 'claude-sonnet-5-5' } as never))
+  expect(sonnet).toContain('subagents stay on Sonnet')
+  expect(sonnet).toContain('only as an advisor')
+  expect(sonnet).not.toContain('opus + xhigh')
+  expect(sonnet).toContain('kokpit:mechanic')
+  const opus = JSON.stringify(await $.prompt.compose(COMPOSE))
+  expect(opus).toContain('opus + high — design')
+  expect(opus).not.toContain('subagents stay on Sonnet')
+  const fable = JSON.stringify(await $.prompt.compose({ ...(COMPOSE as object), model: 'claude-fable-5-2' } as never))
+  expect(fable).toContain('opus + high — design')
+})
+
 for (const surface of SURFACES) {
   test(`${surface}: the band shows the step down from the ceiling, the pane saves project settings`, async ($, on) => {
     const mem: Record<string, unknown> = { 'economy:/p': ON }
