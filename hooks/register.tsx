@@ -1304,6 +1304,16 @@ export function jobCommand(
   return { kind: 'command', label: args.trim().slice(0, 40), command: args }
 }
 
+/** The version in this plugin's own manifest; '' when it cannot be read. */
+async function readVersion($: EngineInterface): Promise<string> {
+  try {
+    const manifest = JSON.parse(String(await $.fs.read(`${$.plugin.root}/.claude-plugin/plugin.json`))) as { version?: unknown }
+    return typeof manifest.version === 'string' ? manifest.version : ''
+  } catch {
+    return ''
+  }
+}
+
 async function runRequest(
   $: EngineInterface,
   kind: 'tests' | 'job' | 'command',
@@ -1335,9 +1345,12 @@ export const register: Register = (on, options) => {
   const language = parseLanguage(options?.language)
   const decisionsSetting = typeof options?.decisionsFile === 'string' ? options.decisionsFile.trim() : ''
   /** Resolved per session (the file may appear later); see decisionsPath. */
+  // The installed version, shown in the /kokpit panel (after an update it tells which code is running).
+  let pluginVersion = ''
   let decisionsFile = decisionsSetting || (language === 'pl' ? 'docs/decyzje.md' : 'docs/decisions.md')
 
   on('session.start', async ($, e, next) => {
+    pluginVersion = await readVersion($)
     const usage = toUsage(await $.session.usage())
     await update($, usageAtom, () => usage)
     // A new session has no handoff in progress; "Writing" left from a reload or /clear is a stuck state.
@@ -1753,11 +1766,13 @@ export const register: Register = (on, options) => {
         const subEffort: Level = isLevel(e.effort) ? e.effort : 'high'
         const baseEffort: Level = lastMainEffort ?? subEffort
         const scale = EFFORT_FACTOR[baseEffort] / EFFORT_FACTOR[subEffort]
-        economyTurn = {
-          ...economyTurn,
-          subCost: economyTurn.subCost + stepCost(usage, e.model, false),
-          subBaseline: economyTurn.subBaseline + stepCost(usage, baseModel, false, scale),
-        }
+        const cost = stepCost(usage, e.model, false)
+        const base = stepCost(usage, baseModel, false, scale)
+        // A model priced above the conversation's is the user's pick (the rubric never chooses one): kept apart.
+        economyTurn =
+          priceFor(e.model).out > priceFor(baseModel).out
+            ? { ...economyTurn, upCost: economyTurn.upCost + cost, upBaseline: economyTurn.upBaseline + base }
+            : { ...economyTurn, subCost: economyTurn.subCost + cost, subBaseline: economyTurn.subBaseline + base }
       }
     } catch {
       // no stats for this step
@@ -1823,7 +1838,7 @@ export const register: Register = (on, options) => {
     const header = (
       <Box flexDirection="column">
         {choice('tab-', TABS, tab, t => update($, tabAtom, () => t))}
-        <Text dimColor>{`${root} · Tab moves between buttons, Esc closes`}</Text>
+        <Text dimColor>{`Kokpit ${pluginVersion || '?'} · ${root} · Tab moves between buttons, Esc closes`}</Text>
         <Text> </Text>
       </Box>
     )
@@ -1973,6 +1988,14 @@ export const register: Register = (on, options) => {
               : 'no data',
             v.sub ? sign(v.sub.usd) : undefined,
           )}
+          {v.upgrade
+            ? row(
+                'st-up',
+                'Your picks',
+                `+${usd(v.upgrade.usd)} for subagents on a model above the conversation's (not counted above)`,
+                'yellow',
+              )
+            : ''}
           <Text> </Text>
           <Text bold>Steps by effort</Text>
           <Box flexDirection="row">
@@ -2010,7 +2033,8 @@ export const register: Register = (on, options) => {
             How this is computed: tokens and their kind (input, cache, output) are measured for every request and priced
             with the API price list. Two things are estimates. Effort: how much more thinking a step at the highest level
             would have produced, hence the ranges (high 1.2–1.6×, xhigh 1.5–2.5×, max 1.8–3.2× of medium output).
-            Subagents: the same tokens on the conversation's model and effort (Explore against Haiku). Share of the week:
+            Subagents: the same tokens on the conversation's model and effort (Explore against Haiku); subagents you put on
+            a more expensive model than the conversation's (e.g. Fable) are your choice, shown apart. Share of the week:
             the measured cost of all requests against the rise of the weekly counter on the selected plan; usage from
             other devices and chats in the meantime inflates it.
           </Text>

@@ -433,6 +433,44 @@ test('in a session: steps with usage count savings, weekly readings calibrate, t
   expect(h).toContain('Decision register')
 })
 
+test('subagents above the conversation\'s model (Fable under Opus) are kept apart from the savings; the pane names the version', async ($, on) => {
+  const mem: Record<string, unknown> = { 'economy:/p': ON }
+  engine(on, mem, [])
+  on('tool.call', async () => ({ result: {} as never }))
+  on('ui.open', () => ({ value: undefined as never }))
+  on('fs.read', (_$, e) =>
+    String((e as { path?: unknown }).path).endsWith('.claude-plugin/plugin.json')
+      ? { value: '{"name":"kokpit","version":"9.8.7"}' as never }
+      : { value: '' as never },
+  )
+  await $.session.start({ cwd: '/p' } as never)
+  await $.turn.start({ text: 'a', turnId: 't1' })
+  await step($ as never)
+  const agentStep = async (model: string, agentId: string) => {
+    const s = $.turn.step({ turnId: 't1', index: 1, model, effort: 'high', messageCount: 2, agentId } as never)
+    for await (const _ of s) {
+      // no chunks
+    }
+    await s.result
+  }
+  await agentStep('claude-fable-5-1', 'f1')
+  await agentStep('claude-sonnet-5-5', 's1')
+  await $.turn.complete({ answer: 'ok', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' } as never)
+  const st = mem['economy-stats:/p'] as { subCost: number; subBaseline: number; upCost: number; upBaseline: number }
+  expect(st.upCost).toBeGreaterThan(st.upBaseline) // Fable costs more than Opus
+  expect(st.subBaseline).toBeGreaterThan(st.subCost) // Sonnet saves
+  const v = statsView(st as never, parseCalibration(undefined))
+  expect(v.sub && v.sub.usd > 0).toBe(true)
+  expect(v.upgrade && v.upgrade.usd > 0).toBe(true)
+  expect(v.total.lo).toBeGreaterThan(0) // the Fable pick does not turn the savings negative
+
+  await $.command.run({ command: 'kokpit', args: '' } as never)
+  const pane = await $.ui.mount({ plugin: 'kokpit', surface: 'terminal', component: 'Pane', props: PANE_PROPS, requestId: 'kokpit-panel' })
+  expect(JSON.stringify(await pane.drawn())).toContain('Kokpit 9.8.7')
+  await pane.press({ key: 'tab-stats' })
+  expect(JSON.stringify(await pane.drawn())).toContain('Your picks')
+})
+
 test('fixed xhigh ceiling: a session at medium, hard goes higher, simple stays at medium', async ($, on) => {
   const mem: Record<string, unknown> = { 'economy:/p': { split: false, effort: true, floor: 'medium', ceiling: 'xhigh' } }
   const sent: { effort?: unknown; model: string }[] = []

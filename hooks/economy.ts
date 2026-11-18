@@ -143,6 +143,8 @@ export function emptyStats(at: string): EconomyStats {
     savedEffortUsd: 0,
     subCost: 0,
     subBaseline: 0,
+    upCost: 0,
+    upBaseline: 0,
     lowerings: {},
     unknownModels: 0,
   }
@@ -183,6 +185,8 @@ export function parseStats(raw: unknown, at: string): EconomyStats {
     savedEffortUsd: num(r.savedEffortUsd),
     subCost: num(r.subCost),
     subBaseline: num(r.subBaseline),
+    upCost: num(r.upCost),
+    upBaseline: num(r.upBaseline),
     lowerings: obj(r.lowerings),
     unknownModels: num(r.unknownModels),
   }
@@ -215,6 +219,8 @@ export function mergeStats(s: EconomyStats, d: EconomyStats): EconomyStats {
     savedEffortUsd: s.savedEffortUsd + d.savedEffortUsd,
     subCost: s.subCost + d.subCost,
     subBaseline: s.subBaseline + d.subBaseline,
+    upCost: s.upCost + d.upCost,
+    upBaseline: s.upBaseline + d.upBaseline,
     lowerings: sumMap(s.lowerings, d.lowerings),
     unknownModels: s.unknownModels + d.unknownModels,
   }
@@ -462,6 +468,8 @@ export type StatsView = {
   effort: { tokens: Range; usd: Range }
   /** Subagents: savings in dollars (negative = more expensive) and relative to the no-Economy scenario; null without data. */
   sub: { usd: number; pct: number } | null
+  /** Subagents on a model above the conversation's: the extra cost in dollars; null without such subagents. */
+  upgrade: { usd: number } | null
   total: Range
   /** Share of the selected plan's week (range) and the week in API dollars; null before calibration. */
   week: { percent: Range; usd: number; samples: number; measured: number } | null
@@ -496,6 +504,7 @@ export function statsView(st: EconomyStats, c: Calibration): StatsView {
       .sort((a, b) => b.n - a.n),
     effort,
     sub,
+    upgrade: st.upCost > 0 ? { usd: st.upCost - st.upBaseline } : null,
     total,
     week:
       week === null

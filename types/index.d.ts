@@ -187,6 +187,12 @@ export type EconomyStats = {
   /** Subagents under Economy: actual cost, and the same traffic on the conversation's model and effort. */
   subCost: number
   subBaseline: number
+  /**
+   * Subagents on a model priced above the conversation's (e.g. Fable under an Opus conversation). The rubric never
+   * picks that: it is the user's choice, so it is shown apart and not counted against Economy's savings.
+   */
+  upCost: number
+  upBaseline: number
   /** Raw data for the estimate: output tokens of lowered steps, keyed "model|ceiling>level". */
   lowerings: Record<string, number>
   /** Steps on models missing from Kokpit's price list (priced as Opus 5.5). */
