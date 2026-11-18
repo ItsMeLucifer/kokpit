@@ -1,0 +1,28 @@
+{
+  // Kokpit tasks: Cmd+Shift+P → "Tasks: Run Task".
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Kokpit: check",
+      "detail": "Validate the plugin, run the mod tests and the repo-standard tests",
+      "type": "shell",
+      "command": "claude plugin validate . && claude plugin test . && python3 skills/setup/scripts/test_standard.py",
+      "group": { "kind": "test", "isDefault": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "Kokpit: update installed plugin",
+      "detail": "Fetch the newest version from GitHub and install it (then /reload-plugins in open sessions)",
+      "type": "shell",
+      "command": "claude plugin marketplace update kokpit && claude plugin update kokpit@kokpit && claude plugin list | grep -A2 kokpit",
+      "problemMatcher": []
+    },
+    {
+      "label": "Kokpit: push and update",
+      "detail": "Push the committed release to GitHub, then update the installed plugin (bump version in plugin.json first)",
+      "type": "shell",
+      "command": "git push && claude plugin marketplace update kokpit && claude plugin update kokpit@kokpit && claude plugin list | grep -A2 kokpit",
+      "problemMatcher": []
+    }
+  ]
+}
