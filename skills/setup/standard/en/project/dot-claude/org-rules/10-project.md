@@ -22,6 +22,11 @@ The **Owner** is {{OWNER}} (GitHub: `{{GITHUB}}`), the only person allowed to ch
 <!-- Language and versions (runtime, framework), where they are pinned (e.g. .nvmrc, pyproject.toml, engine version), and the first-run commands. -->
 {{ENVIRONMENT}}
 
+## Quality bar
+
+<!-- Prototype or product (per area when they differ); the linter and checks (the `checks` section of .claude/kokpit.json); mistakes agents keep making here and what catches each. -->
+{{QUALITY}}
+
 ## Verification (fixed commands)
 
 Every change ends with these commands (`00-core-verification.md`). The last line is the full check, if the project has one.

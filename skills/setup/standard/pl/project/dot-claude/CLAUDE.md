@@ -13,6 +13,7 @@
 | `.claude/org-rules/` | zasady niepodważalne | `README.md` |
 | `.claude/rules/` | reguły obszarów (ładują się przy pracy nad pasującymi plikami) | nagłówek `paths:` |
 | `docs/` | wiki: jak to działa i dlaczego | `docs/README.md` |
+| `docs/funkcje/` | mapa funkcji: jak sterować aplikacją i dowieść, że funkcja działa | czytaj, zanim uznasz funkcję za gotową (`/kokpit:verify`) |
 | `docs/postep.md` | gdzie jest praca, linia na obszar | czytaj przed pracą w obszarze |
 | `docs/decyzje.md` | decyzje czekające na Właściciela | `/decisions` |
 | `.claude/handoffs/` | wątki pracy między sesjami | `/handoff`, `/resume` |

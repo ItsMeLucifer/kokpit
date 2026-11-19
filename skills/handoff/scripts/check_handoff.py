@@ -16,7 +16,6 @@ import re
 import sys
 from pathlib import Path
 
-# Section keys and their headings per language.
 HEADINGS = {
     "en": {
         "goal": "## Goal",

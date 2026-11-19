@@ -31,8 +31,6 @@ python_run() {  # $1 = script in this directory, then its arguments
 py() { python_run setup.py "$@"; }
 standard() { python_run standard.py "$@"; }
 
-# --- plugins -----------------------------------------------------------------------------------------
-
 plugins() { grep -v '^[[:space:]]*#' "$HERE/plugins.txt" | grep -v '^[[:space:]]*$'; }
 
 marketplace_exists() { claude plugin marketplace list 2>/dev/null | grep -qE "❯ $1( |\$)"; }
@@ -71,8 +69,6 @@ plugins_step() {
     esac
   done < <(plugins)
 }
-
-# --- tools -------------------------------------------------------------------------------------------
 
 # $1 = PyPI package, $2 = pinned version, $3 = install spec, $4 = optional Python version.
 tool() {
@@ -125,8 +121,6 @@ machine() {
   fi
 }
 
-# --- project -----------------------------------------------------------------------------------------
-
 add_gitignore() {  # $1 = project directory, $2 = line
   file="$1/.gitignore"
   if grep -qxF "$2" "$file" 2>/dev/null; then ok ".gitignore: $2"; return; fi
@@ -152,8 +146,7 @@ graphify_step() {  # $1 = project directory
   fi
   [ "$MODE" = check ] && return 0
   has graphify || { missing "graphify not installed: setup.sh machine --graphify"; return 1; }
-  # Local AST only (no subagents, no tokens). `graphify install` is skipped on purpose: it adds a block to
-  # ~/.claude/CLAUDE.md that `graphify uninstall` does not remove.
+  # `graphify install` is skipped: it adds a block to ~/.claude/CLAUDE.md that `graphify uninstall` does not remove.
   if (cd "$1" && GRAPHIFY_NO_CTA=1 GRAPHIFY_BACKEND=none graphify extract . --code-only >/dev/null 2>&1); then ok "graph built (code-only)"
   else missing "graphify extract . --code-only failed"; return 1
   fi
@@ -187,8 +180,6 @@ project() {  # $1 = project directory
   graphify_step "$1"
 }
 
-# --- entry -------------------------------------------------------------------------------------------
-
 COMMAND="${1:-check}"
 [ $# -gt 0 ] && shift
 if [ "$COMMAND" = standard ]; then standard "$@"; exit $?; fi
@@ -204,7 +195,6 @@ for a in "$@"; do
     *)  TARGET="$a" ;;
   esac
 done
-# The check also shows the optional tools when they are already on the machine.
 if [ "$COMMAND" = check ]; then
   has graphify && WITH_GRAPHIFY=1
   has headroom && WITH_HEADROOM=1

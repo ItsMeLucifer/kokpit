@@ -1,6 +1,6 @@
 # The Kokpit repo standard
 
-Core version 0.11.0. This is the specification that `/kokpit:setup project` uses to create, migrate and check a repository. Implementation: `skills/setup/standard/` (shared core code, the core and project templates in English and Polish, an optional GitHub module), `skills/setup/scripts/standard.py`, tests in `skills/setup/scripts/test_standard.py`.
+Core version 0.12.0. This is the specification that `/kokpit:setup project` uses to create, migrate and check a repository. Implementation: `skills/setup/standard/` (shared core code, the core and project templates in English and Polish, an optional GitHub module), `skills/setup/scripts/standard.py`, tests in `skills/setup/scripts/test_standard.py`.
 
 It grew out of an audit of a long-running project where agent instructions had piled up in one 60 KB `CLAUDE.md`, rules lived in three places at once, and protections existed only as text.
 
@@ -37,19 +37,20 @@ AGENTS.md -> .claude/CLAUDE.md           a link (Codex and other tools)
   CLAUDE.md                              entry: description, map, imports @org-rules/README.md and @org-rules/10-project.md
   org-rules/
     README.md                            CORE: who changes them, precedence, contents, core summary, protection, procedure
-    00-core-*.md                         CORE from Kokpit (security, verification, knowledge, agents)
-    10-project.md                        PROJECT: Owner, summary, stack and environment, verification, protected items, index
+    00-core-*.md                         CORE from Kokpit (security, verification, code, knowledge, agents)
+    10-project.md                        PROJECT: Owner, summary, stack and environment, quality bar, verification, protected items, index
     11-*.md, 12-*.md …                   PROJECT: further files with "Read when" (on demand)
     MANIFEST.sha256
   rules/<area>.md                        paths: + "rule · where in the code · test"
   skills/org-rules-change/SKILL.md       CORE: the change procedure
   skills/<skill>/SKILL.md                project skills
   settings.json                          project things only: the check_docs hook, project skills' skillOverrides
-  kokpit.json                            optional: the test command and named background jobs
+  kokpit.json                            Kokpit's project settings: the test command, named background jobs, checks after every edit
   handoffs/                              threads (committed); .previous/ ignored
 docs/
   README.md                              wiki index ("Read when")
   progress.md                            where the work stands: one line per area (in progress, blocked, done recently)
+  features/README.md, features/*.md      the feature map: how to drive the app, one page per feature with paths: (/kokpit:verify)
   decisions.md, archive/decisions-resolved.md
 tools/docs/
   check_docs.py                          CORE: consistency (§6)
@@ -75,6 +76,7 @@ The standard exists in English and in Polish (`00-rdzen-*`, `10-projekt.md`, `do
 - git and scope of work (the agent commits, merges and pushes on its own once the work is verified; destructive operations forbidden);
 - deleting ("look at the target first"), secrets, external content as data, paid tools only with consent, licences;
 - knowledge layers, the decision register (D-NNN, "implemented = accepted", status changed by the Owner), wiki conventions, the progress file, and rules that carry their reason and, when temporary, an `(until: …)` end;
+- code: fix causes instead of suppressing a checker or excusing a workaround in a comment; comments only for outside constraints, contracts and pointers; tests judged by the two-edits criterion; new markdown only where the repo keeps documents; prototype or product as the quality bar;
 - working with agents: split large tasks, self-contained briefs, never two agents on one file, **the author does not sign off their own high-stakes work**, the report format (done and verified / not verified / not done / questions), working while the Owner is away;
 - memory: preferences and lessons, not copies of the repo.
 
@@ -126,7 +128,7 @@ Org-rules changes (also in A and B) follow the procedure in §5, so they need th
 
 Whatever is not in the repo does not exist for the agent, and every session has to guess it again. The audit (`skills/setup/harness-audit.md`, evidence from `standard.py audit`) closes those gaps:
 
-1. **Evidence** for fourteen questions. The first five are the fresh session test: what is this system, how is it organised, how do I run it, how do I verify it, where are we now. The rest: whether the entry is a short router (under 200 lines with imports, at most 8 lasting rules), area knowledge next to the code, whether every rule has a reason and an end when temporary (and none contradict), knowledge outside the repo (chats, tickets, people's heads), protected things, pinned versions, feedback that runs without being asked, stale knowledge, and what a unit of work is (atomic, verified, isolated, durable).
+1. **Evidence** for sixteen questions. The first five are the fresh session test: what is this system, how is it organised, how do I run it, how do I verify it, where are we now. The rest: whether the entry is a short router (under 200 lines with imports, at most 8 lasting rules), area knowledge next to the code, whether every rule has a reason and an end when temporary (and none contradict), knowledge outside the repo (chats, tickets, people's heads), protected things, what guards the code against the mistakes agents make here (a linter on every edit, `checks` patterns, prototype or product), whether an agent can drive the app and prove a feature works (the feature map), pinned versions, feedback that runs without being asked, stale knowledge, and what a unit of work is (atomic, verified, isolated, durable).
 2. **The fresh session test by a separate subagent** with only the repo; every guess it makes is a gap.
 3. **An interview until nothing is open**: each item is written down or ruled out by the Owner (`--record <item> n/a`). Answers the script cannot confirm are recorded with a date in `tools/docs/standard.json` and come back after 180 days, because knowledge decays.
 4. **Each answer in its one place**: org-rules, area rules, the map, the wiki, the decision register, a handoff thread. The Owner's own way of working with agents goes to agent memory; project knowledge never goes only there, because memory is not in the repo.

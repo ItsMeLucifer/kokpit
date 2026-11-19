@@ -1,5 +1,4 @@
-// Economy: splitting work across subagents with a fitting model and effort, and dynamic effort for the
-// main conversation. Pure rules only; the engine wiring lives in register.tsx.
+// Economy: subagent model/effort split and dynamic effort for the main conversation. Engine wiring is in register.tsx.
 
 import type { Calibration, EconomySettings, EconomyStats, Level, Plan, Rating } from '../types'
 
@@ -54,10 +53,7 @@ export function isRating(x: unknown): x is Rating {
   return typeof x === 'string' && (RATINGS as string[]).includes(x)
 }
 
-/**
- * Models on which changing effort mid-conversation keeps the prompt cache (Opus/Sonnet/Haiku 5.5 and
- * Fable 5.1, on a subscription or an API key). Elsewhere a change would re-read the whole conversation.
- */
+/** Models on which changing effort mid-conversation keeps the prompt cache; elsewhere the whole conversation is re-read. */
 export function effortCacheSafe(model: string): boolean {
   return /(opus|sonnet|haiku)-5-5|fable-5-1/.test(model)
 }
@@ -74,10 +70,8 @@ export function levelFor(rating: Rating | null, bumps: number, floor: Level, cei
   return LEVELS[Math.max(raised, rank(floor))] ?? ceiling
 }
 
-/** Subagent types allowed to run on Haiku: narrow scope, cheap to verify. */
 export const HAIKU_TYPES = ['Explore', 'kokpit:reporter', 'kokpit:mechanic']
 
-/** Kokpit's Haiku agents: duties live in their own prompt, with an explicit "ABORTED" instead of guessing. */
 export const HAIKU_AGENTS = [
   {
     name: 'reporter',
@@ -198,7 +192,6 @@ function sumMap(a: Record<string, number>, b: Record<string, number>): Record<st
   return out
 }
 
-/** Adds what one turn collected (steps, ratings, subagents) to the stored stats. */
 export function mergeStats(s: EconomyStats, d: EconomyStats): EconomyStats {
   const steps = { ...s.steps }
   for (const l of LEVELS) {
@@ -249,10 +242,7 @@ const RUBRIC_TIERS =
   '• sonnet + medium — mechanical changes following a given pattern, running tests and reporting, documentation ' +
   'from provided content; '
 
-/**
- * Tiers for a conversation on Sonnet: the user picked the cheaper model to save the limit, so an Opus
- * subagent (twice the price for the same tokens) is an exception, not the default for design work.
- */
+/** Tiers for a conversation on Sonnet. */
 const RUBRIC_TIERS_SONNET =
   'this conversation runs on Sonnet to save the usage limit, so subagents stay on Sonnet too: ' +
   '• sonnet + high — design, a bug with an unknown cause, cross-cutting changes, subtle domain logic, ' +
@@ -274,7 +264,7 @@ const RUBRIC_TAIL =
   'what you touch next anyway; use paths from Explore directly and search again only when one proves wrong. ' +
   'ABORTED or a failing check → do it yourself or via sonnet, never retry on haiku. '
 
-/** Model rubric and how far to trust reports: part of Kokpit in every repo. Depends on the conversation's model. */
+/** Model rubric and trust rules for subagent reports; depends on the conversation's model. */
 export function splitRubric(mainModel = ''): string {
   return RUBRIC_HEAD + (/sonnet/.test(mainModel) ? RUBRIC_TIERS_SONNET : RUBRIC_TIERS) + RUBRIC_TAIL
 }
@@ -300,9 +290,7 @@ export function splitNoteStandard(rulesFile: string, mainModel = ''): string {
   )
 }
 
-// ── Savings estimate and conversion to the weekly limit ──
-
-/** API prices per million tokens (October 2026): a common measure across models; the subscription limit weighs models too. */
+/** API prices per million tokens (October 2026). */
 type Price = { in: number; out: number; cw5m: number; cw1h: number; cr: number }
 const PRICES: { re: RegExp; p: Price }[] = [
   { re: /fable-5-1/, p: { in: 10, out: 50, cw5m: 12.5, cw1h: 20, cr: 0.25 } },
@@ -334,10 +322,7 @@ export type StepUsage = {
   cache_creation_input_tokens?: number
 }
 
-/**
- * Cost of one request in API dollars. Cache writes: the main conversation on a subscription uses the
- * one-hour TTL, subagents the five-minute one. `outScale` scales output (the "at another level" scenario).
- */
+/** Cost of one request in API dollars. Cache writes: 1 h TTL for the main conversation on a subscription, 5 min for subagents. `outScale` scales output. */
 export function stepCost(u: StepUsage | null | undefined, model: string, main: boolean, outScale = 1): number {
   if (!u) return 0
   const prompt = (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0)
@@ -351,10 +336,7 @@ export function stepCost(u: StepUsage | null | undefined, model: string, main: b
   )
 }
 
-/**
- * Point estimate of how many times more output (mostly thinking) a step produces at a level than at medium.
- * Used only for the live counter; the stats view uses EFFORT_RANGE.
- */
+/** Point estimate of output relative to medium at a level; for the live counter only (the stats view uses EFFORT_RANGE). */
 export const EFFORT_FACTOR: Record<Level, number> = { low: 0.7, medium: 1, high: 1.4, xhigh: 2, max: 2.6 }
 
 /** Output tokens a step at `actual` did not produce compared with `ceiling`. */
@@ -386,15 +368,11 @@ export function parseCalibration(raw: unknown): Calibration {
   }
 }
 
-/** Adds a request's cost to the current increment. */
 export function calibrationAddCost(c: Calibration, cost: number): Calibration {
   return { ...c, accrued: c.accrued + cost }
 }
 
-/**
- * A new weekly reading: a rise closes a sample (cost since the previous reading ↔ the rise). A drop (old
- * usage left the 7-day window) discards the accrued cost, because it cannot be attributed.
- */
+/** A new weekly reading: a rise closes a sample (accrued cost ↔ the rise); a drop (old usage left the 7-day window) discards the accrued cost. */
 export function calibrationReading(c: Calibration, percent: number): Calibration {
   if (c.last === null) return { ...c, last: percent, accrued: 0 }
   if (percent < c.last) return { ...c, last: percent, accrued: 0 }
@@ -423,10 +401,7 @@ export function weekPercent(savings: number, c: Calibration): number | null {
   return week === null ? null : (savings / week) * 100
 }
 
-/**
- * Range of how many times more output (mostly thinking) a step produces at a level than at medium.
- * The model already shortens thinking on simple steps, so the difference is uncertain: a range, not a number.
- */
+/** Output relative to medium at a level, as a range because the real difference is uncertain (see EFFORT_FACTOR). */
 export const EFFORT_RANGE: Record<Level, [number, number]> = {
   low: [0.6, 0.8],
   medium: [1, 1],
@@ -540,8 +515,6 @@ export function range(r: Range, fmt: (n: number) => string): string {
   return Math.abs(r.hi - r.lo) < 1e-9 ? fmt(r.lo) : `${fmt(r.lo)}–${fmt(r.hi)}`
 }
 
-// ── Local model (Ollama, opencode) ──
-
 export const LOCAL_TOOL = 'local_model'
 export const LOCAL_DIR = '.claude/kokpit/local'
 
@@ -573,10 +546,7 @@ export function localTextCmd(model: string, promptFile: string): string {
   return `ollama run ${sq(model)} < ${sq(promptFile)}`
 }
 
-/**
- * Command: a separate worktree from HEAD, opencode with an Ollama model, the diff saved next to it.
- * The worktree stays for review; the output prints the cleanup command.
- */
+/** Command: opencode with an Ollama model in a separate worktree from HEAD; the diff is saved next to it and the worktree stays for review. */
 export function localCodeCmd(root: string, id: string, model: string, promptFile: string): string {
   const wt = `${root}/${LOCAL_DIR}/${id}`
   const diff = `${root}/${LOCAL_DIR}/${id}.diff`

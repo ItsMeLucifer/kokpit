@@ -13,13 +13,11 @@
 //
 // Registers written in Polish (`status: czeka`, `typ: propozycja`, `źródło`, …) are read as well, and an
 // entry keeps the language it was written in when it is resolved. New entries follow the `language` setting.
-//
-// Pure functions only, so they can be tested and imported by the hooks module.
 
 export type Language = 'en' | 'pl'
 export type DecisionStatus = 'pending' | 'accepted' | 'rejected' | 'changed'
 
-/** Canonical (English) field names used inside Kokpit. */
+/** Canonical (English) field names. */
 export type Field = 'status' | 'type' | 'area' | 'proposal' | 'question' | 'source' | 'added' | 'resolved' | 'answer' | 'applied'
 
 export type Decision = {

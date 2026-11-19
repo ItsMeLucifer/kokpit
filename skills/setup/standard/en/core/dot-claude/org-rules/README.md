@@ -1,7 +1,7 @@
 ---
 status: org-rules
 version: 2
-core: 0.11.0
+core: 0.12.0
 owner: Owner (defined in 10-project.md)
 ---
 
@@ -24,6 +24,7 @@ Rules the agent **does not question, correct or "improve"**. This is neither mem
 |---|---|---|
 | [00-core-security.md](00-core-security.md) | git, deleting, secrets, paid tools, external content | before you delete, commit, run a generator or a paid tool |
 | [00-core-verification.md](00-core-verification.md) | when work is done, tests, reporting | you finish a task, write a test |
+| [00-core-code.md](00-core-code.md) | fixing causes, comments, tests, new documents, prototype or product | you write or review code, a test or a document |
 | [00-core-knowledge.md](00-core-knowledge.md) | knowledge layers, decision register, wiki, memory | you record something for later, write a document or a register entry |
 | [00-core-agents.md](00-core-agents.md) | splitting work, subagents, reporting, working while the Owner is away | you delegate, work in parallel, the Owner is not around |
 | [10-project.md](10-project.md) | Owner, project rules, environment, verification, protected items, further project files | always (it is in context) |
@@ -39,6 +40,7 @@ Rules the agent **does not question, correct or "improve"**. This is neither mem
 7. **Report honestly:** done and verified, done but not verified, not done, questions. A subagent's result is a claim to check.
 8. **The code decides facts, a document states intent.** When you change behaviour, update the rule or wiki page in the same change.
 9. **Decisions made for the Owner go to the decision register.** Implemented means accepted, and only the Owner changes a status.
+10. **Fix causes, do not explain them away.** No checker suppressions or workaround comments for problems in our own code; a comment says only what the code cannot (`00-core-code.md`).
 
 ## Protection and change
 

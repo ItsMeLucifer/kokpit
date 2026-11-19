@@ -12,7 +12,6 @@ export type Usage = {
   weekResetsAt: string | null
 }
 
-/** Handoff state in this session. */
 export type Handoff = {
   /** Context tokens up to which the handoff is snoozed ("Later"). */
   snoozedUntil: number
@@ -26,13 +25,13 @@ export type Handoff = {
   savedTurnId: string | null
   /** The conversation moved on since the save: the handoff must be refreshed before /clear. */
   stale: boolean
-  /** After a successful handoff Kokpit runs /clear and resumes by itself (the user already asked). */
+  /** Run /clear and resume by itself once the handoff succeeds. */
   clearAfter: boolean
   /** The session is in plan mode (file writes blocked): no handoff starts. */
   planMode: boolean
   /** A handoff was requested in plan mode and waits for plan mode to end. */
   afterPlan: boolean
-  /** "Clear and resume" while background work runs: /clear after its results, thread refreshed first. */
+  /** "Clear and resume" requested while background work runs: /clear after its results, thread refreshed first. */
   clearWhenIdle: boolean
   /** Context tokens at the last handoff in this session (0 = none yet). */
   lastTokens: number
@@ -91,8 +90,17 @@ export type Job = {
 /** Decision register counters for the bar. */
 export type DecisionCounts = { pending: number; toApply: number }
 
-/** Tab of the /kokpit pane. */
-export type Tab = 'economy' | 'stats' | 'handoff'
+export type Tab = 'economy' | 'stats' | 'quality' | 'handoff'
+
+/** Quality features of a project, switched in /kokpit (machine-local, shared by the project's worktrees). */
+export type QualitySettings = {
+  /** Checks after every edit (the `checks` section of .claude/kokpit.json can also turn them off). */
+  checks: boolean
+  /** The band offers /kokpit:verify when a task list completes after code changed. */
+  verify: boolean
+  /** A handoff proposes skills and checks to the decision register. */
+  lessons: boolean
+}
 
 declare module 'claude-code' {
   interface PluginState {
@@ -124,8 +132,12 @@ declare module 'claude-code' {
       calibration: { calibration: Calibration; plan: Plan } | null
       /** Ollama models and whether opencode exists, or null before the check. */
       local: { models: string[]; opencode: boolean; ollama: boolean } | null
-      /** Open tab of the /kokpit pane. */
       tab: Tab
+      quality: QualitySettings
+      /** Explanations shown in the /kokpit panel. */
+      help: boolean
+      /** Code changed under a task list that is now complete: the band offers /kokpit:verify. */
+      verifyOffer: boolean
     }
   }
 }
@@ -133,9 +145,8 @@ declare module 'claude-code' {
 /** A background result waiting for the user's answer (it is attached to it). */
 export type InboxItem = { id: string; label: string; text: string }
 
-/** Economy in this conversation. */
 export type EconomyState = {
-  /** Settings in effect in this conversation (loaded at start or after /clear: the prompt does not change mid-conversation). */
+  /** Settings in effect in this conversation (loaded at start or after /clear). */
   active: EconomySettings
   /** Settings saved for the project (they differ from the active ones until the next conversation). */
   saved: EconomySettings
@@ -149,28 +160,25 @@ export type EconomyState = {
   current: Level | null
 }
 
-/** Model effort level. */
 export type Level = 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 /** Difficulty rating the model reports with Kokpit's tool. */
 export type Rating = 'simple' | 'medium' | 'hard'
 
 /** Economy settings per project (Kokpit store, keyed by the project root). */
 export type EconomySettings = {
-  /** Large tasks are split across subagents, each with a model (Opus/Sonnet) and effort from the rubric. */
+  /** Split large tasks across subagents with model and effort from the rubric. */
   split: boolean
-  /** Main-conversation effort follows difficulty: start at the ceiling, step down after the rating. */
+  /** Main-conversation effort follows difficulty: starts at the ceiling, steps down after the rating. */
   effort: boolean
-  /** Lowest level effort may drop to. */
   floor: Level
   /** Highest level: fixed (Kokpit may raise effort above the session setting) or "session" = the session setting. */
   ceiling: Level | 'session'
-  /** Simple tasks go to a local Ollama model (text directly, code through opencode in a separate worktree). */
+  /** Simple tasks go to a local Ollama model (code through opencode in a worktree). */
   local: boolean
   /** Ollama model name, e.g. glm-4.7-flash. */
   localModel: string
 }
 
-/** Economy stats for a project. */
 export type EconomyStats = {
   since: string
   /** Main-conversation steps by effort: count and output tokens. */
@@ -187,10 +195,7 @@ export type EconomyStats = {
   /** Subagents under Economy: actual cost, and the same traffic on the conversation's model and effort. */
   subCost: number
   subBaseline: number
-  /**
-   * Subagents on a model priced above the conversation's (e.g. Fable under an Opus conversation). The rubric never
-   * picks that: it is the user's choice, so it is shown apart and not counted against Economy's savings.
-   */
+  /** Subagents on a model priced above the conversation's; shown apart, not counted in Economy's savings. */
   upCost: number
   upBaseline: number
   /** Raw data for the estimate: output tokens of lowered steps, keyed "model|ceiling>level". */

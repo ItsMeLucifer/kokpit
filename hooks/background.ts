@@ -1,5 +1,4 @@
 // Background jobs: the project's tests, named jobs from .claude/kokpit.json and any shell command.
-// Pure functions only: building the argv, reading progress from output, formatting.
 
 import type { Job } from '../types'
 
@@ -92,7 +91,6 @@ export function clock(ms: number): string {
   return (h ? h + ':' : '') + mm + ':' + String(sec).padStart(2, '0')
 }
 
-/** One status line for the bar. */
 export function jobLine(job: Job, now: number): string {
   const time = clock((job.endedAt ?? now) - job.startedAt)
   const counts =
@@ -106,7 +104,6 @@ export function jobLine(job: Job, now: number): string {
   return `${ok ? '✓' : '✗'} ${job.label} · ${time}${counts}${code}${failures}`
 }
 
-/** The last `n` non-empty output lines. */
 export function tail(text: string, n: number): string {
   return text
     .split('\n')
@@ -115,7 +112,6 @@ export function tail(text: string, n: number): string {
     .join('\n')
 }
 
-/** The message for Claude when a job ends. */
 export function resultPrompt(job: Job, output: string): string {
   const head =
     `Background job "${job.label}" ${job.code === 0 ? 'succeeded' : 'failed'} ` +
@@ -123,7 +119,6 @@ export function resultPrompt(job: Job, output: string): string {
   const tests = job.kind === 'tests' ? ` Passed ${job.passed}${job.total ? '/' + job.total : ''}.` : ''
   const failed = job.failedNames.length ? ` Failed: ${job.failedNames.join(', ')}.` : ''
   const log = job.logPath ? `\nFull log: ${job.logPath}` : ''
-  // A local model's output is the answer itself: keep more of it.
   const n = job.kind === 'local' ? 400 : 40
   return `${head}${tests}${failed}${log}\n\nEnd of output:\n\`\`\`\n${tail(output, n)}\n\`\`\``
 }

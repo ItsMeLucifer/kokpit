@@ -22,6 +22,11 @@ Czytaj, gdy: zawsze (importuje go `.claude/CLAUDE.md`). Dodatek projektu do rdze
 <!-- Język i wersje (runtime, framework), skąd się biorą (np. .nvmrc, pyproject.toml, wersja silnika) i komendy pierwszego uruchomienia. -->
 {{SRODOWISKO}}
 
+## Poprzeczka jakości
+
+<!-- Prototyp czy produkt (osobno dla obszarów, jeśli się różnią); linter i kontrole (sekcja `checks` w .claude/kokpit.json); błędy, które agenci tu powtarzają, i co łapie każdy z nich. -->
+{{JAKOSC}}
+
 ## Weryfikacja (komendy stałe)
 
 Każda zmiana kończy się tymi komendami (`00-rdzen-weryfikacja.md`). Ostatnia linia to pełne sprawdzenie, jeśli projekt je ma.

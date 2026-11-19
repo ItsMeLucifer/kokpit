@@ -9,6 +9,7 @@ import type {
   HandoffLogEntry,
   InboxItem,
   Job,
+  QualitySettings,
   Tab,
   Task,
   TaskStatus,
@@ -71,14 +72,23 @@ import {
   usd,
 } from './economy'
 import type { Calibration, EconomySettings, EconomyStats, Level, Plan, StepUsage } from './economy'
+import {
+  addedLines,
+  checksNote,
+  findIssues,
+  isCode,
+  LINT_TIMEOUT_MS,
+  lintArgv,
+  lintCommand,
+  lintProblems,
+  MARKDOWN_REASON,
+  markdownAllowed,
+  parseChecks,
+} from './checks'
+import type { ChecksConfig } from './checks'
 import { hiddenSkills, parseShare, withSkill } from './tools'
 
-// Kokpit: a band above the prompt.
-//   row 1: context · 5-hour limit · weekly limit · progress of the current task list
-//   row 2: from a token threshold on, a handoff (button / after a finished task / right away);
-//          after the save "Clear and resume" (or on its own with the next message);
-//          in a fresh session "Resume" for the latest thread.
-// A handoff appends to the thread file .claude/handoffs/<thread>.md (the /handoff skill).
+// Kokpit: the band above the prompt (usage, task progress, handoff to .claude/handoffs/<thread>.md).
 
 const usageAtom = atom({ plugin: 'kokpit', key: 'usage' } as const, null)
 const tasksAtom = atom({ plugin: 'kokpit', key: 'tasks' } as const, [])
@@ -123,6 +133,10 @@ const localAtom = atom(
   null as { models: string[]; opencode: boolean; ollama: boolean } | null,
 )
 const tabAtom = atom({ plugin: 'kokpit', key: 'tab' } as const, 'economy' as Tab)
+const verifyOfferAtom = atom({ plugin: 'kokpit', key: 'verifyOffer' } as const, false)
+const QUALITY_ON: QualitySettings = { checks: true, verify: true, lessons: true }
+const qualityAtom = atom({ plugin: 'kokpit', key: 'quality' } as const, QUALITY_ON)
+const helpAtom = atom({ plugin: 'kokpit', key: 'help' } as const, false)
 const calibrationAtom = atom(
   { plugin: 'kokpit', key: 'calibration' } as const,
   null as { calibration: Calibration; plan: Plan } | null,
@@ -135,9 +149,10 @@ const KOKPIT_PANE = 'kokpit-panel'
 const TABS: { id: Tab; label: string }[] = [
   { id: 'economy', label: 'Economy' },
   { id: 'stats', label: 'Stats' },
+  { id: 'quality', label: 'Quality' },
   { id: 'handoff', label: 'Handoff & tools' },
 ]
-/** Latest answers of a conversation Kokpit cleared (`<thread>.md`). */
+/** Holds `<thread>.md` with the latest answers of a conversation Kokpit cleared. */
 export const ANSWERS_DIR = '.claude/kokpit/previous'
 /** How many of Claude's latest answers survive a clear. */
 export const ANSWERS_KEEP = 2
@@ -152,7 +167,7 @@ export const HANDOFF_DIR = '.claude/handoffs'
 export const STEP_TOKENS = 30_000
 /** How long "resume after /clear" lives in the store; older entries are leftovers of a failed clear. */
 export const PENDING_TTL_MS = 5 * 60_000
-/** Leftovers of the /clear bridge from closed windows are cleaned after this long (a handoff never takes it). */
+/** Bridge keys of a window silent this long are leftovers (window closed mid-clear). */
 const FLOW_ORPHAN_MS = 60 * 60_000
 /** Keys of the bridge across /clear; in the store always with the window id (`pendingPrompt:<id>`). */
 const FLOW_KEYS = ['pendingPrompt', 'pendingResume', 'pendingPrevious', 'pendingAt'] as const
@@ -160,10 +175,7 @@ type FlowKey = (typeof FLOW_KEYS)[number]
 /** Keys of old code (shared by all windows), removed at start. */
 const LEGACY_KEYS = ['pendingContext', 'pendingPrompt', 'pendingResume', 'pendingPrevious']
 
-/**
- * A Kokpit file in the project: from the session root, not the current directory, because `cd` in Bash moves
- * the latter (after `cd .claude/handoffs` a relative `.claude/kokpit/…` would land in the wrong place).
- */
+/** Absolute path of a project file, from the session root: `cd` in Bash moves the session cwd. */
 async function inProject($: EngineInterface, rel: string): Promise<string> {
   if (rel.startsWith('/')) return rel
   return (await $.session.root()).replace(/\/+$/, '') + '/' + rel
@@ -172,9 +184,8 @@ async function inProject($: EngineInterface, rel: string): Promise<string> {
 let owner: string | null = null
 
 /**
- * Store key of this conversation window. The store is shared by all sessions and projects, and a message held
- * before /clear must come back to the same conversation, not a parallel one. Window id = id of the process's
- * first session; it lives in the module (survives /clear, same process) and in $.state (survives a code reload).
+ * Store key of this window. The store is shared by all sessions and projects; the window id is the process's
+ * first session id, kept in the module (survives /clear) and in $.state (survives a code reload).
  */
 async function flowKey($: EngineInterface, name: FlowKey): Promise<string> {
   const kept = await read($, ownerAtom)
@@ -196,15 +207,12 @@ async function flowDelete($: EngineInterface, name: FlowKey): Promise<void> {
   await $.store.delete(await flowKey($, name))
 }
 
-/** "Resume after /clear" is fresh: saved a moment ago, not left behind by a long-failed clear. */
+/** Whether a /clear bridge timestamp is younger than PENDING_TTL_MS. */
 export function isFresh(at: unknown, now: number): boolean {
   return typeof at === 'number' && now - at <= PENDING_TTL_MS
 }
 
-/**
- * Store keys to delete: old shared ones (from before window keys) and bridges of windows silent for an hour
- * (closed in the middle of clearing).
- */
+/** Store keys to delete: LEGACY_KEYS and bridge keys of windows silent longer than FLOW_ORPHAN_MS. */
 export function orphanKeys(keys: string[], store: Record<string, unknown>, now: number): string[] {
   const flowOwner = (k: string): string | null => {
     const [name = '', id = ''] = k.split(':')
@@ -220,19 +228,19 @@ export function orphanKeys(keys: string[], store: Record<string, unknown>, now: 
 }
 /** Never later than at 75% of the window: the engine's auto-compact comes around 95%. */
 const WINDOW_CAP = 0.75
-/** Default hard threshold: soft + this. From it on a handoff starts even mid-work. */
+/** Default hard threshold = soft threshold + this many tokens. */
 export const HARD_EXTRA = 100_000
-/** The hard threshold is never further than 85% of the window. */
+/** Hard threshold cap, as a fraction of the context window. */
 const HARD_CAP = 0.85
 const LOG_LIMIT = 300
 
 export type Mode = 'button' | 'break' | 'auto'
-/** Log entry mode: the handoff mode, or a refresh of the thread before clearing on a message. */
+/** The handoff mode, or 'refresh' (thread refreshed before clearing on a message). */
 export type LogMode = HandoffLogEntry['mode']
 /** After a thread is saved: clear on the user's next message, or only from the button. */
 export type ClearMode = 'message' | 'button'
 
-/** Option values accepted from before 0.10 (Polish). */
+/** Also accepts the Polish option values written before 0.10. */
 export function parseMode(v: unknown): Mode {
   if (v === 'button' || v === 'przycisk') return 'button'
   if (v === 'auto') return 'auto'
@@ -301,7 +309,7 @@ const PLAN_NOTE =
   'Kokpit: the session is in plan mode, so the handoff is postponed; it starts by itself after plan mode ends. ' +
   'Do not save the session state anywhere (not to the plan file either). Say so in one sentence and get back to work.'
 
-/** Handoff thread headings by language (the validator accepts both sets). */
+/** Handoff thread headings by language; keep in sync with skills/handoff/scripts/check_handoff.py. */
 export const THREAD_HEADINGS: Record<Language, string[]> = {
   en: [
     'Goal',
@@ -332,6 +340,9 @@ export const THREAD_HEADINGS: Record<Language, string[]> = {
 }
 
 /** Appended to the handoff skill: which language a new thread is written in. */
+export const LESSONS_OFF_NOTE =
+  '\n\nKokpit: lessons are turned off for this project in /kokpit. Skip the step "Lessons for skills and checks".'
+
 export function handoffLanguageNote(lang: Language): string {
   if (lang === 'en') {
     return (
@@ -361,17 +372,14 @@ export function setupLanguageNote(lang: Language): string {
 /** Agent statuses whose result is still to come to this session. */
 const AGENT_BUSY = ['pending', 'running', 'waiting']
 
-/**
- * What in this session's background is still working: agents, Kokpit jobs, background commands from the last
- * Stop. Their results come only to this conversation; a /clear before them would lose them.
- */
+/** Background work still running (agents, Kokpit jobs, tasks from the last Stop); its results reach only this conversation. */
 export function busyLabels(
   agents: { status: string; description: string; type: string; teammateId?: string }[],
   jobs: { endedAt: number | null; label: string }[],
   tasks: { type: string; description: string }[],
 ): string[] {
   return [
-    // A companion chat (nested or detached) is a separate conversation: it waits for the user, not for us.
+    // A teammate is a separate conversation: it waits for the user, not for this one.
     ...agents
       .filter(a => AGENT_BUSY.includes(a.status) && a.type !== 'teammate' && !a.teammateId)
       .map(a => a.description || a.type),
@@ -404,10 +412,7 @@ export function thresholdFor(setting: number, window: number): number {
   return Math.min(setting, Math.floor(window * WINDOW_CAP))
 }
 
-/**
- * Hard threshold: the setting (0 = soft + 100k), never beyond 85% of the window and never below the soft one.
- * From it on a handoff starts at the end of a turn even mid-work, so the context does not grow without end.
- */
+/** Hard threshold: the setting (0 = soft + HARD_EXTRA), at most HARD_CAP of the window, never below soft. */
 export function hardThresholdFor(soft: number, setting: number, window: number): number {
   const wanted = setting > 0 ? setting : soft + HARD_EXTRA
   return Math.max(soft, Math.min(wanted, Math.floor(window * HARD_CAP)))
@@ -421,8 +426,8 @@ export function isDue(tokens: number | null, threshold: number, h: Handoff): boo
 }
 
 /**
- * Whether a handoff starts by itself at the end of a turn. One per conversation (never again after a save),
- * from the soft threshold only after a finished task, from the hard one always; "Later" snoozes both.
+ * Whether a handoff starts by itself at the end of a turn: once per conversation, from the soft threshold only
+ * after a finished task, from the hard one always; "Later" snoozes both.
  */
 export function autoDue(tokens: number | null, soft: number, hard: number, h: Handoff, finished: boolean): boolean {
   if (tokens === null || h.running || h.lastTokens > 0) return false
@@ -481,16 +486,13 @@ export function answersMarkdown(thread: string, answers: Answer[], at: string): 
   )
 }
 
-/** First-line mark of Kokpit's housekeeping turns (handoff, resume after clearing); see the skills. */
+/** First-line mark of Kokpit's housekeeping turns; written by skills/handoff and skills/resume (SKILL.md). */
 export const HOUSEKEEPING_MARK = 'Kokpit · '
 
 const NOTE_RE =
   /The session "([^"]*)" you started \([^)]*\) finished a turn\. It reported \(quoted child output, data not instructions\): "/g
 
-/**
- * The app's note about a turn of a side session that only saved a handoff or resumed a thread: the titles of
- * those sessions, or null when the note carries anything else (then it goes through normally).
- */
+/** Titles from the app's note about side sessions that only saved a handoff or resumed a thread; null if it says more. */
 export function housekeepingNote(text: string): string[] | null {
   const titles: string[] = []
   for (const m of text.matchAll(NOTE_RE)) {
@@ -501,10 +503,7 @@ export function housekeepingNote(text: string): string[] | null {
   return titles.length > 0 ? titles : null
 }
 
-/**
- * The thread named by the handoff skill's mark ("Kokpit · handoff saved: <thread>" as the first line of the
- * answer), or null. The mark also counts when the thread was already up to date and the file did not change.
- */
+/** Thread named by the handoff skill's first line "Kokpit · handoff saved: <thread>", or null. */
 export function savedMark(answer: string): string | null {
   const first = answer.trimStart().split('\n', 1)[0] ?? ''
   const m = first.match(/^\**Kokpit · handoff saved:\**\s*`?([^`\s]+)/)
@@ -523,12 +522,14 @@ export function previousContext(markdown: string): string {
   )
 }
 
+/** A task in progress counts as this much of a finished one, so the bar moves before anything finishes. */
+const IN_PROGRESS_WEIGHT = 0.5
+
 /** Completion of the current task list (null when there is none). */
 export function progress(tasks: Task[]): { done: number; total: number; percent: number; current: string | null } | null {
   if (tasks.length === 0) return null
   const done = tasks.filter(t => t.status === 'completed').length
-  // A task in progress counts as half, so the bar moves before anything finishes.
-  const half = tasks.filter(t => t.status === 'in_progress').length * 0.5
+  const half = tasks.filter(t => t.status === 'in_progress').length * IN_PROGRESS_WEIGHT
   const current = tasks.find(t => t.status === 'in_progress')?.subject ?? null
   return { done, total: tasks.length, percent: Math.round(((done + half) / tasks.length) * 100), current }
 }
@@ -555,12 +556,10 @@ export function isHandoffPath(path: string, cwd: string): boolean {
 /** A thread's archive file (archive and older log entries): it sits next to the thread but is not one. */
 export const ARCHIVE_SUFFIXES = ['.archive.md', '.archiwum.md']
 
-/** Whether a name (or path) is a thread file rather than its archive. */
 export function isThreadFile(name: string): boolean {
   return name.endsWith('.md') && !ARCHIVE_SUFFIXES.some(s => name.endsWith(s))
 }
 
-/** Thread name from its path. */
 export function threadName(path: string): string {
   return (path.split('/').pop() ?? path).replace(/\.md$/, '')
 }
@@ -615,7 +614,7 @@ export function k(n: number | null): string {
   return n >= 1000 ? Math.round(n / 1000) + 'k' : String(n)
 }
 
-// Module state (lost on reload: these are only details of the current turn).
+// ── Module state (lost on a code reload) ──
 /** In this turn `wrap_up` asked the user a question (`ask`). */
 let askedThisTurn = false
 let currentTurnId = ''
@@ -623,35 +622,45 @@ let pendingMode: LogMode = 'button'
 let pendingTokens = 0
 /** Commands and other background tasks from the last classic.Stop (the engine reports them only there). */
 let lastBackground: { type: string; description: string }[] = []
-/** The main loop is inside a turn (a background result sent now would land after it, maybe after a question). */
 let turnRunning = false
-/** Background results that arrived during a turn: at its end we decide whether they go to Claude or wait. */
+let codeUnderTasks = false
+/** Checks that reported something in this session, for the Quality tab. */
+let checkReports = { count: 0, last: '' }
+/** Background results that arrived during the current turn; see releaseAfterTurn. */
 let afterTurn: InboxItem[] = []
 
-async function backgroundWork($: EngineInterface): Promise<string[]> {
-  let agents: { status: string; description: string; type: string; teammateId?: string }[] = []
+/** The result of `fn`, or `fallback` when it throws. */
+async function attempt<T>(fn: () => Promise<T>, fallback: T): Promise<T> {
   try {
-    agents = await $.agent.list()
+    return await fn()
   } catch {
-    // Without the agent list, Kokpit jobs and background commands still count.
+    return fallback
   }
+}
+
+/** The engine throws when a name is already registered (an earlier load in this process). */
+async function registerOnce(register: () => Promise<unknown>): Promise<void> {
+  await attempt(register, undefined)
+}
+
+async function backgroundWork($: EngineInterface): Promise<string[]> {
+  const agents = await attempt(() => $.agent.list(), [] as { status: string; description: string; type: string; teammateId?: string }[])
   return busyLabels(agents, await read($, jobsAtom), lastBackground)
 }
 
-// ── Economy: per-project settings, difficulty rating, stats ──
+// ── Economy ──
 
-/** Collected in the current turn (steps, ratings, subagents), stored at the end of the turn. */
+/** Economy stats of the current turn, stored at its end. */
 let economyTurn: EconomyStats = emptyStats('')
-/** Main-conversation model and effort from the last step: the no-Economy scenario for subagents. */
+/** Main-conversation model and effort of the last step: the no-Economy baseline for subagents. */
 let lastMainModel = ''
 let lastMainEffort: Level | null = null
-/** Subagent type by id (Explore without Economy would run on Haiku). */
 const agentTypes = new Map<string, string>()
 /** Failed tool calls in subagents (by id): each raises the effort of that subagent's next steps. */
 const agentErrors = new Map<string, number>()
 /** Cost (API prices) measured since the last weekly reading, for calibration at the next one. */
 let accruedCost = 0
-/** Whether opencode exists on this machine (the local model's "code" mode); checked when Economy loads. */
+/** opencode is installed (needed by the local model's "code" mode). */
 let opencodeOk = false
 
 async function hasCommand($: EngineInterface, name: string): Promise<boolean> {
@@ -703,7 +712,7 @@ async function readPlan($: EngineInterface): Promise<Plan> {
   return asPlan(await migrated($, PLAN_KEY, ['ekonom-plan']))
 }
 
-/** Calibration is separate for each plan: a Pro week is a different number of dollars than a Max x20 week. */
+/** Calibration is per plan: a Pro week is a different number of dollars than a Max x20 week. */
 async function readCalibrationFor($: EngineInterface, plan: Plan): Promise<Calibration> {
   // Before 0.8 there was one calibration, measured on Max x20 (the only plan known then).
   const legacy = [`ekonom-kalibracja:${plan}`, ...(plan === 'x20' ? ['ekonom-kalibracja'] : [])]
@@ -736,21 +745,15 @@ async function calibrate($: EngineInterface, weekPercent: number): Promise<void>
 
 let projectRootCache: { root: string; project: string } | null = null
 
-/**
- * Project root shared by all worktrees: the directory above the common `.git` (git --git-common-dir).
- * Outside a repo or without git: the session root.
- */
+/** Project root shared by all worktrees (parent of git's common dir); the session root outside git. */
 async function projectRoot($: EngineInterface): Promise<string> {
   const root = (await $.session.root()).replace(/\/+$/, '')
   if (projectRootCache?.root === root) return projectRootCache.project
-  let project = root
-  try {
+  const dir = await attempt(async () => {
     const r = await $.process.run(['git', '-C', root, 'rev-parse', '--path-format=absolute', '--git-common-dir'])
-    const dir = r.exitCode === 0 ? r.stdout.trim() : ''
-    if (dir.endsWith('/.git')) project = dir.slice(0, -'/.git'.length)
-  } catch {
-    // no git: the session root
-  }
+    return r.exitCode === 0 ? r.stdout.trim() : ''
+  }, '')
+  const project = dir.endsWith('/.git') ? dir.slice(0, -'/.git'.length) : root
   projectRootCache = { root, project }
   return project
 }
@@ -759,13 +762,29 @@ async function settingsKey($: EngineInterface): Promise<string> {
   return `economy:${await projectRoot($)}`
 }
 
+export function parseQuality(raw: unknown): QualitySettings {
+  const r = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {}
+  return { checks: r.checks !== false, verify: r.verify !== false, lessons: r.lessons !== false }
+}
+
+async function loadQuality($: EngineInterface): Promise<void> {
+  const saved = parseQuality(await $.store.get(`quality:${await projectRoot($)}`))
+  await update($, qualityAtom, () => saved)
+}
+
+async function saveQuality($: EngineInterface, change: (q: QualitySettings) => QualitySettings): Promise<void> {
+  const next = change(await read($, qualityAtom))
+  await $.store.set(`quality:${await projectRoot($)}`, next)
+  await update($, qualityAtom, () => next)
+}
+
 async function statsKey($: EngineInterface): Promise<string> {
   return `economy-stats:${await projectRoot($)}`
 }
 
 /**
- * Loads the project's settings as active for this conversation. Only at start and after /clear: a prompt and
- * tool list changed mid-conversation would make the whole conversation be read again (cache).
+ * Loads the project's settings for this conversation. Only at start and after /clear: a prompt or tool list
+ * changed mid-conversation invalidates the prompt cache.
  */
 async function loadEconomy($: EngineInterface): Promise<EconomySettings> {
   const project = await projectRoot($)
@@ -773,18 +792,12 @@ async function loadEconomy($: EngineInterface): Promise<EconomySettings> {
   // Before 0.6.3 settings were keyed by the worktree root; before 0.10 the key was Polish.
   const saved = parseSettings(await migrated($, await settingsKey($), [`ekonom:${project}`, `ekonom:${sessionRoot}`]))
   if (saved.split) {
-    for (const a of HAIKU_AGENTS) {
-      try {
-        await $.agent.register({ ...a, omitClaudeMd: a.name === 'reporter' } as never)
-      } catch {
-        // already registered, or the session is not ready yet
-      }
-    }
+    for (const a of HAIKU_AGENTS) await registerOnce(() => $.agent.register({ ...a, omitClaudeMd: a.name === 'reporter' } as never))
   }
   if (saved.local && saved.localModel) {
     opencodeOk = await hasCommand($, 'opencode')
-    try {
-      await $.tool.register({
+    await registerOnce(() =>
+      $.tool.register({
         name: LOCAL_TOOL,
         description:
           'Hands a simple task to a local Ollama model (in the background, returns at once; the result arrives as a ' +
@@ -799,15 +812,13 @@ async function loadEconomy($: EngineInterface): Promise<EconomySettings> {
           },
           required: ['mode', 'task'],
         },
-      })
-    } catch {
-      // already registered in this process
-    }
+      }),
+    )
   }
   await update($, economyAtom, () => ({ ...ECONOMY_0, active: saved, saved }))
   if (saved.effort) {
-    try {
-      await $.tool.register({
+    await registerOnce(() =>
+      $.tool.register({
         name: RATING_TOOL,
         description:
           'Difficulty rating of the current request for Kokpit, which matches your reasoning level to it. Call it as ' +
@@ -820,10 +831,8 @@ async function loadEconomy($: EngineInterface): Promise<EconomySettings> {
           },
           required: ['rating'],
         },
-      })
-    } catch {
-      // already registered in this process (e.g. after /clear)
-    }
+      }),
+    )
   }
   return saved
 }
@@ -894,13 +903,10 @@ async function noteSaved($: EngineInterface, path: string): Promise<void> {
   pendingTokens = 0
 }
 
-/** Toast when a message is held for a handoff or a refresh (that takes about a minute). */
+/** Toast duration for a message held during a handoff or refresh. */
 const LONG_TOAST_MS = 30_000
 
-/**
- * A message held for the new session. The desktop app shows `drop` as "Prompt blocked by a hook" and hides
- * the reason in the details, so the same text also goes out as a toast.
- */
+/** Holds a message; the desktop app shows `drop` only as "Prompt blocked by a hook", so the text also goes out as a toast. */
 function heldNotice($: EngineInterface, what: string, timeoutMs?: number): { drop: string } {
   const text = 'Kokpit: your message is waiting (not an error) — ' + what
   $.ui.toast(text, timeoutMs ? { timeoutMs } : undefined)
@@ -921,7 +927,6 @@ async function flushPrompt($: EngineInterface): Promise<void> {
   await $.prompt.submit({ text: held, asUser: true })
 }
 
-/** Background results as one block of text (context for an answer, or a message in the new session). */
 function inboxText(items: InboxItem[]): string {
   return items
     .map(x => 'Kokpit — a background result that arrived while Claude was waiting for the user:\n' + x.text)
@@ -935,8 +940,8 @@ async function takeInbox($: EngineInterface): Promise<InboxItem[]> {
 }
 
 /**
- * A background result for Claude. Sent at once only in a quiet session that is not waiting for the user; during
- * a turn it waits for the turn's end (the turn may end with a question), after a question for the answer.
+ * A background result for Claude: sent at once only in a quiet session; during a turn it waits for the turn's
+ * end, and while Claude waits for the user it waits for the answer.
  */
 async function deliver($: EngineInterface, item: InboxItem): Promise<void> {
   if (turnRunning) {
@@ -950,7 +955,7 @@ async function deliver($: EngineInterface, item: InboxItem): Promise<void> {
   await $.prompt.submit({ text: item.text })
 }
 
-/** End of a main-loop turn: results that arrived during it go on, or wait for the answer. */
+/** Releases results that arrived during the turn: to Claude, or into the inbox when `hold`. */
 async function releaseAfterTurn($: EngineInterface, hold: boolean): Promise<void> {
   const items = afterTurn
   afterTurn = []
@@ -975,18 +980,15 @@ async function saveAnswers($: EngineInterface, threadPath: string): Promise<void
   if (answers.length === 0) return
   const thread = threadName(threadPath)
   const file = await inProject($, `${ANSWERS_DIR}/${thread}.md`)
-  try {
+  await attempt(async () => {
     await $.fs.write(file, answersMarkdown(thread, answers, new Date(await $.clock.now()).toISOString()))
     await flowSet($, 'pendingPrevious', file)
-  } catch {
-    // Without the file the clear still goes ahead: the thread has the state of the work.
-  }
+  }, undefined)
 }
 
 /** /clear and resuming the thread in a new session (through $.store, because /clear ends this session). */
 async function clearAndResume($: EngineInterface, path: string, force = false): Promise<void> {
-  // Background work of this session would deliver its result to a conversation that no longer exists: wait for
-  // it (turn.complete). "Clear anyway" (force) skips the wait, so waiting is never a dead end.
+  // Background results go only to this conversation, which /clear ends: wait for them unless forced.
   const busy = force ? [] : await backgroundWork($)
   if (busy.length > 0) {
     await update($, handoffAtom, h => ({ ...h, clearAfter: false, clearWhenIdle: true, busy }))
@@ -995,7 +997,6 @@ async function clearAndResume($: EngineInterface, path: string, force = false): 
     return
   }
   await update($, handoffAtom, h => ({ ...h, clearAfter: false, clearWhenIdle: false, busy: undefined }))
-  // Held background results go to the new session with the user's message instead of being lost with this one.
   const held = await takeInbox($)
   if (held.length > 0) await holdPrompt($, inboxText(held))
   await saveAnswers($, path)
@@ -1009,10 +1010,7 @@ async function clearAndResume($: EngineInterface, path: string, force = false): 
   }
 }
 
-/**
- * "Clear and resume" button / manual /clear / a message: refresh a stale thread first, clear only then.
- * A refresh triggered by a message has its own log mode (`refresh`); the rest is `button`.
- */
+/** Refreshes the thread with a handoff, then clears once it is saved (`clearAfter`). */
 async function refreshThenClear($: EngineInterface, mode: LogMode = 'button'): Promise<void> {
   await update($, handoffAtom, h => ({ ...h, clearAfter: true }))
   await startHandoff($, mode)
@@ -1044,26 +1042,17 @@ export function pickSaved(files: { path: string; mtimeMs: number }[], since: num
   return best ? best.path : null
 }
 
-/**
- * End of a turn during a handoff: a thread file saved since the start → done; nothing saved → drop "Writing".
- * It does not rely on catching a specific Write/Edit (relative path, a write from Bash, another surface).
- */
+/** End of a turn during a handoff, judged by thread file mtimes (a write may come from Bash or another surface). */
 async function finishHandoff($: EngineInterface, aborted: boolean, answer: string): Promise<void> {
   const h = await read($, handoffAtom)
   if (!h.running) return
-  let files: { path: string; mtimeMs: number }[] = []
-  try {
-    files = await threadFiles($)
-  } catch {
-    // no directory or a read error = nothing saved
-  }
+  const files = await attempt(() => threadFiles($), [] as { path: string; mtimeMs: number }[])
   const saved = pickSaved(files, h.startedAt)
   if (saved) {
     await noteSaved($, saved)
     return
   }
-  // The skill confirmed a thread whose file did not change (already up to date, or written in another
-  // checkout such as a worktree): still a finished handoff, so the band must not offer another one.
+  // The skill's mark counts even when the file did not change (already up to date, or written in another worktree).
   const marked = aborted ? null : savedMark(answer)
   if (marked) {
     await noteSaved($, (await inProject($, HANDOFF_DIR)) + '/' + marked + '.md')
@@ -1074,7 +1063,6 @@ async function finishHandoff($: EngineInterface, aborted: boolean, answer: strin
   pendingTokens = 0
   const why = aborted ? 'Handoff interrupted: the thread file is unchanged.' : 'The handoff did not save a thread file.'
   $.ui.toast(h.clearAfter ? why + ' Not clearing the conversation.' : why)
-  // A message held for the handoff goes to this conversation.
   await flushPrompt($)
 }
 
@@ -1090,46 +1078,37 @@ function setupScript($: EngineInterface, name: string): string {
 async function refreshTools($: EngineInterface): Promise<void> {
   const root = await $.session.root()
   const settingsFile = await inProject($, SETTINGS_FILE)
-  let graphifyInstalled = false
-  let share: number | null = null
-  let fits = false
-  try {
-    graphifyInstalled = (await $.process.run(['bash', '-lc', 'command -v graphify'])).exitCode === 0
-  } catch {
-    // no login shell = treat as no graphify
-  }
-  try {
-    const r = await $.process.run(
-      ['python3', '-I', setupScript($, 'setup.py'), 'graph', root, setupScript($, 'graphify_extensions.txt')],
-      { timeoutMs: 20_000 },
-    )
-    share = parseShare(r.stdout)
-    fits = r.exitCode === 0
-  } catch {
-    // no python3, no verdict
-  }
-  let graphOn = false
-  try {
-    graphOn = (await $.fs.exists(settingsFile)) && (await $.fs.read(settingsFile)).includes('graphify')
-  } catch {
-    // unreadable settings = no hooks
-  }
-  let hidden: string[] = []
-  try {
+  const graphifyInstalled = await attempt(
+    async () => (await $.process.run(['bash', '-lc', 'command -v graphify'])).exitCode === 0,
+    false,
+  )
+  const graph = await attempt(
+    async () => {
+      const r = await $.process.run(
+        ['python3', '-I', setupScript($, 'setup.py'), 'graph', root, setupScript($, 'graphify_extensions.txt')],
+        { timeoutMs: 20_000 },
+      )
+      return { share: parseShare(r.stdout), fits: r.exitCode === 0 }
+    },
+    { share: null as number | null, fits: false },
+  )
+  const { share, fits } = graph
+  const graphOn = await attempt(
+    async () => (await $.fs.exists(settingsFile)) && String(await $.fs.read(settingsFile)).includes('graphify'),
+    false,
+  )
+  const hidden = await attempt(async () => {
     const project = (await $.settings.read({ source: 'project' })) as { skillOverrides?: Record<string, unknown> }
-    hidden = hiddenSkills(project.skillOverrides)
-  } catch {
-    // without project settings nothing is hidden
-  }
-  let skills: ToolsInfo['skills'] = []
-  try {
-    skills = (await $.command.list())
-      .filter(c => c.source === 'user')
-      .map(c => ({ name: c.name, description: c.description }))
-      .sort((a, b) => a.name.localeCompare(b.name))
-  } catch {
-    // without the command list only the hidden ones remain
-  }
+    return hiddenSkills(project.skillOverrides)
+  }, [] as string[])
+  const skills = await attempt(
+    async () =>
+      (await $.command.list())
+        .filter(c => c.source === 'user')
+        .map(c => ({ name: c.name, description: c.description }))
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    [] as ToolsInfo['skills'],
+  )
   await update($, toolsAtom, () => ({ graphifyInstalled, graphOn, share, fits, hidden, skills }))
 }
 
@@ -1181,7 +1160,7 @@ async function decide(
 
 // ── Background jobs ──
 
-/** Job output (for "Show Claude" and the log); lost when the module reloads. */
+/** Job output by id; lost on a code reload. */
 const outputs = new Map<string, string>()
 const pids = new Map<string, string>()
 
@@ -1203,7 +1182,7 @@ async function startJob(
     passed: 0, failed: 0, failedNames: [], lastLine: '', logPath: null, hidden: false,
   }
   await update($, jobsAtom, js => [...js.filter(j => j.endedAt === null || !j.hidden), job].slice(-JOBS_KEEP))
-  // No await: the loop lives on after the hook returns, until the process ends.
+  // Not awaited: runs on after the hook returns.
   void runJob($, job, argv)
   return id
 }
@@ -1217,7 +1196,7 @@ async function runJob($: EngineInterface, job: Job, argv: string[]): Promise<voi
   let current = job
   let code: number | null = null
   try {
-    // In the project root: job commands use relative paths, and `cd` in Bash moves the session directory.
+    // Session root, not cwd: `cd` in Bash moves the session cwd.
     const stream = $.process.spawn({ argv: wrapped, cwd: await $.session.root() })
     for await (const chunk of stream) {
       const lines = (partial + chunk.text).split('\n')
@@ -1325,6 +1304,56 @@ async function runRequest(
   return startJob($, job.kind, (label ?? '').trim() || job.label, shellArgv(job.command), byClaude)
 }
 
+async function projectChecks($: EngineInterface): Promise<ChecksConfig> {
+  try {
+    return parseChecks(String(await $.fs.read(await inProject($, PROJECT_CONFIG))))
+  } catch {
+    return parseChecks(null)
+  }
+}
+
+/** The path relative to the session root, or null outside the project. */
+async function projectRelative($: EngineInterface, path: string): Promise<string | null> {
+  const root = (await $.session.root()).replace(/\/+$/, '')
+  return path.startsWith(root + '/') ? path.slice(root.length + 1) : null
+}
+
+async function readOrEmpty($: EngineInterface, path: string): Promise<string> {
+  try {
+    return String(await $.fs.read(path))
+  } catch {
+    return ''
+  }
+}
+
+/** Checks on what an edit added: suppressions, workaround comments, project patterns, the linter on changed lines. */
+async function editNote($: EngineInterface, path: string, rel: string, before: string): Promise<string | null> {
+  const c = await projectChecks($)
+  if (!c.enabled) return null
+  const added = addedLines(before, await readOrEmpty($, path))
+  if (!added.length) return null
+  const findings = findIssues(rel, added, c)
+  const command = lintCommand(c, rel)
+  let lint: string[] = []
+  if (command) {
+    const cwd = (await $.session.root()).replace(/\/+$/, '')
+    const out = await $.process.run(lintArgv(command), { cwd, timeoutMs: LINT_TIMEOUT_MS })
+    if (out.exitCode !== 0) lint = lintProblems(`${out.stdout}\n${out.stderr}`, rel, added.map(a => a.line))
+  }
+  return checksNote(rel, findings, lint)
+}
+
+/** The feature map's directory and number of pages, or null without one. */
+async function featureMap($: EngineInterface): Promise<{ dir: string; pages: number } | null> {
+  for (const dir of ['docs/features', 'docs/funkcje']) {
+    const abs = await inProject($, dir)
+    if (!(await attempt(() => $.fs.exists(abs + '/README.md'), false))) continue
+    const entries = await attempt(async () => [...(await $.fs.list(abs))], [] as { name: string; kind: string }[])
+    return { dir, pages: entries.filter(x => x.kind === 'file' && x.name.endsWith('.md') && x.name !== 'README.md').length }
+  }
+  return null
+}
+
 /** The register file: the setting, else the one that exists, else the default for the language. */
 async function decisionsPath($: EngineInterface, setting: string, lang: Language): Promise<string> {
   if (setting) return setting
@@ -1344,32 +1373,26 @@ export const register: Register = (on, options) => {
   const nudge = options?.taskNudge !== false
   const language = parseLanguage(options?.language)
   const decisionsSetting = typeof options?.decisionsFile === 'string' ? options.decisionsFile.trim() : ''
-  /** Resolved per session (the file may appear later); see decisionsPath. */
-  // The installed version, shown in the /kokpit panel (after an update it tells which code is running).
   let pluginVersion = ''
+  // Re-resolved per session (the file may appear later); see decisionsPath.
   let decisionsFile = decisionsSetting || (language === 'pl' ? 'docs/decyzje.md' : 'docs/decisions.md')
 
   on('session.start', async ($, e, next) => {
     pluginVersion = await readVersion($)
     const usage = toUsage(await $.session.usage())
     await update($, usageAtom, () => usage)
-    // A new session has no handoff in progress; "Writing" left from a reload or /clear is a stuck state.
+    // A new session never has a handoff running; "Writing" left from a reload or /clear is stuck.
     await update($, handoffAtom, h => (h.running ? { ...h, running: false } : h))
     decisionsFile = await decisionsPath($, decisionsSetting, language)
     await refreshDecisions($, decisionsFile)
-    try {
-      await loadEconomy($)
-    } catch {
-      // without the store Economy stays off
-    }
-    // Store leftovers: keys of old code and /clear bridges of windows closed mid-clear.
+    await loadEconomy($).catch(() => ECONOMY_OFF)
+    await loadQuality($).catch(() => undefined)
     try {
       const keys = await $.store.keys()
       const values: Record<string, unknown> = {}
       for (const k of keys) if (k.startsWith('pendingAt:')) values[k] = await $.store.get(k)
       for (const k of orphanKeys(keys, values, await $.clock.now())) await $.store.delete(k)
     } catch {
-      // without the key list the leftovers stay; nothing reads them
     }
     await $.tool.register({
       name: BACKGROUND_TOOL,
@@ -1402,17 +1425,15 @@ export const register: Register = (on, options) => {
         await update($, resumableAtom, () => found)
       }
     } catch {
-      // No directory or no permissions: simply no "Resume" button.
     }
     return next(e)
   })
 
-  // After /clear: $.state starts from zero, and if "Clear and resume" was pressed, /resume runs right away.
-  // A message held before the clear goes right after the resume, with the latest answers in context.
+  // After /clear ($.state starts empty): /resume the thread from the bridge, then send the held message.
   on('classic.SessionStart', { source: ['clear'] }, async ($, e, next) => {
-    // After /clear the prompt is rebuilt anyway: this is when Economy changes take effect.
+    // The prompt is rebuilt after /clear anyway, so Economy changes take effect here.
     await loadEconomy($).catch(() => ECONOMY_OFF)
-    // This window's bridge across /clear; an expired one (a long-failed clear) is dropped with its message.
+    await loadQuality($).catch(() => undefined)
     const fresh = isFresh(await flowGet($, 'pendingAt'), await $.clock.now())
     const resume = fresh ? ((await flowGet($, 'pendingResume')) as string | undefined) : undefined
     const previous = fresh ? ((await flowGet($, 'pendingPrevious')) as string | undefined) : undefined
@@ -1422,16 +1443,15 @@ export const register: Register = (on, options) => {
     if (previous) await update($, previousAtom, () => previous)
     if (resume) {
       $.clock.after(0, async () => {
-        // "after-clear": /resume only reports in and does not start step 1, because a message comes next.
+        // "after-clear": /resume does not start step 1, a message follows (skills/resume/scripts/find.sh).
         await runSkill($, 'resume', threadName(resume) + (held ? ' after-clear' : ''))
         if (held) {
-          // The latest answers as a hidden conversation row: the model reads them, the user has them in the pane.
+          // A hidden conversation row: the model reads it, the user sees the answers in the pane.
           if (previous) {
             try {
               const text = previousContext(await $.fs.read(previous))
               await $.session.append({ message: { type: 'user', content: [{ type: 'text', text }] } })
             } catch {
-              // without the file the message still goes
             }
           }
           await $.prompt.submit({ text: held, asUser: true })
@@ -1501,7 +1521,6 @@ export const register: Register = (on, options) => {
     }
   })
 
-  // The tool for Claude: returns at once, the result comes as a message when the job ends.
   on('tool.call', { tool: 'mcp__kokpit__background' }, async ($, e) => {
     const input = e as unknown as { kind?: string; args?: string; label?: string }
     const kind = input.kind === 'job' || input.kind === 'command' ? input.kind : 'tests'
@@ -1550,14 +1569,11 @@ export const register: Register = (on, options) => {
     return { ...r, sections: [...r.sections, ...extra] }
   })
 
-  // Safety net: if an auto-compact happens after all, the summary must not blur decisions and must point to
-  // the thread file. We do not block it: with a full window the handoff might no longer fit.
   on('session.compact', { trigger: 'auto' }, async ($, e, next) => {
     if (e.agentId) return next(e)
     return next({ ...e, instructions: [e.instructions, COMPACT_NOTE].filter(Boolean).join('\n') })
   }).catch(($, e, next) => next(e))
 
-  // A manual /clear after a stale handoff would lose what came after the save: refresh first.
   on('command.run', { command: 'clear' }, async ($, e, next) => {
     if (e.origin.kind === 'plugin') return next(e)
     const h = await read($, handoffAtom)
@@ -1572,8 +1588,7 @@ export const register: Register = (on, options) => {
     }
   }).catch(($, e, next) => next(e))
 
-  // /handoff typed by hand or called by Claude counts as "writing" too. In plan mode the thread cannot be
-  // written: a note replaces the skill and the handoff comes back after plan mode ends.
+  // Plan mode blocks file writes: PLAN_NOTE replaces the skill and the handoff starts after plan mode.
   on('skill.prompt', async ($, e, next) => {
     const name = e.skill.replace(/^kokpit:/, '')
     if (name === 'handoff') {
@@ -1588,7 +1603,8 @@ export const register: Register = (on, options) => {
         await update($, handoffAtom, x => ({ ...x, running: true, startedAt: now, savedPath: null }))
       }
       const r = await next(e)
-      return { text: r.text + handoffLanguageNote(language) }
+      const lessons = (await read($, qualityAtom)).lessons ? '' : LESSONS_OFF_NOTE
+      return { text: r.text + handoffLanguageNote(language) + lessons }
     }
     if (name === 'setup') {
       const r = await next(e)
@@ -1597,23 +1613,18 @@ export const register: Register = (on, options) => {
     return next(e)
   }).catch(($, e, next) => next(e))
 
-  // A user message after the thread was saved: instead of the button, refresh (when needed), clear, resume and
-  // send it in the new session. During a handoff it waits for the handoff to end.
   on('prompt.submit', async ($, e, next) => {
-    // A note about a side session's handoff or resume: nothing new, and the model would comment on it.
     if (e.origin.kind !== 'composer' && e.origin.kind !== 'bridge' && e.origin.kind !== 'plugin') {
       const quiet = housekeepingNote(e.text)
       if (quiet) return { drop: `Kokpit: skipped a note — "${quiet.join('", "')}" only saved a handoff or resumed a thread.` }
       return next(e)
     }
     await update($, resumableAtom, () => null)
-    // The user's answer: background results held during the question go with it (the model reads them).
     if ((e.origin.kind === 'composer' || e.origin.kind === 'bridge') && !e.command) {
       const held = await takeInbox($)
       if (held.length > 0) e = { ...e, context: [...(e.context ?? []), inboxText(held)] }
     }
     if (clearMode !== 'message' || (e.origin.kind !== 'composer' && e.origin.kind !== 'bridge')) return next(e)
-    // Commands, messages with images and hidden ones stay in this conversation (an image cannot be carried over).
     if (e.command || e.isMeta || (e.attachments && e.attachments.length > 0)) return next(e)
     const h = await read($, handoffAtom)
     if (h.planMode) return next(e)
@@ -1622,9 +1633,8 @@ export const register: Register = (on, options) => {
       await update($, handoffAtom, x => ({ ...x, clearAfter: true }))
       return heldNotice($, 'finishing the handoff, then I clear the conversation, resume the thread and send it in the new session.', LONG_TOAST_MS)
     }
-    // Without a saved thread there is nothing to resume; during another turn /clear would interrupt it.
+    // e.turnId: sent during a running turn, which /clear would interrupt.
     if (!h.savedPath || e.turnId) return next(e)
-    // Background work would deliver its result to a conversation that no longer exists: the message stays here.
     if ((await backgroundWork($)).length > 0) return next(e)
     const path = h.savedPath
     await holdPrompt($, [e.text, ...(e.context ?? [])].join('\n\n'))
@@ -1636,7 +1646,7 @@ export const register: Register = (on, options) => {
     return heldNotice($, `clearing the conversation and resuming the thread "${threadName(path)}"; the message goes out in the new session.`)
   }).catch(($, e, next) => next(e))
 
-  // Plan mode of the main loop: the reminder comes with every request, the exit once.
+  // The plan mode attachment comes with every request, the exit once.
   on('prompt.attachment', { type: ['plan_mode', 'plan_mode_reentry', 'plan_mode_exit'] }, async ($, e, next) => {
     if (!e.agentId) {
       const planMode = e.type !== 'plan_mode_exit'
@@ -1647,7 +1657,7 @@ export const register: Register = (on, options) => {
 
   // ── Economy ──
 
-  // The rating tool must be listed right away, not behind ToolSearch, or the rating would cost an extra step.
+  // Not deferred behind ToolSearch, so the rating costs no extra step.
   on('tool.describe', { tool: 'mcp__kokpit__effort_rating' }, async ($, e, next) => ({ ...(await next(e)), isDeferred: false })).catch(
     ($, e, next) => next(e),
   )
@@ -1687,7 +1697,6 @@ export const register: Register = (on, options) => {
     const rating = input.rating
     const reason = typeof input.reason === 'string' ? input.reason.slice(0, 120) : ''
     const eco = await read($, economyAtom)
-    // A repeated rating in the same turn corrects up or down; tool failures are counted afresh.
     await update($, economyAtom, x => ({ ...x, rating, reason, bumps: 0 }))
     economyTurn = mergeStats(economyTurn, { ...emptyStats(''), ratings: { [rating]: 1 } })
     const ceiling = eco.ceiling
@@ -1700,12 +1709,10 @@ export const register: Register = (on, options) => {
     }
   })
 
-  // A failed tool call in the main conversation: something went wrong, the next steps go one level higher (up to the ceiling).
   on('tool.call', async ($, e, next) => {
     const r = await next(e)
     if (!('isError' in r) || !r.isError) return r
     if (e.agentId) {
-      // A failure in a subagent: its next steps go one level higher (turn.step).
       agentErrors.set(e.agentId, (agentErrors.get(e.agentId) ?? 0) + 1)
       return r
     }
@@ -1714,7 +1721,6 @@ export const register: Register = (on, options) => {
     return r
   }).catch(($, e, next) => next(e))
 
-  // Every main-conversation request: effort from the rating. Only on models where the change keeps the cache.
   on('turn.step', async function* ($, e, next) {
     const eco = await read($, economyAtom)
     let send = e
@@ -1729,9 +1735,7 @@ export const register: Register = (on, options) => {
       lastMainModel = e.model
       if (isLevel(e.effort)) lastMainEffort = e.effort
       if (eco.active.effort && isLevel(e.effort) && effortCacheSafe(e.model)) {
-        // The ceiling from the settings (xhigh by default), or the session level.
         ceiling = eco.active.ceiling === 'session' ? e.effort : eco.active.ceiling
-        // In plan mode thinking is the whole job: stay at the ceiling.
         const plan = (await read($, handoffAtom)).planMode
         want = plan ? ceiling : levelFor(eco.rating, eco.bumps, eco.active.floor, ceiling)
         if (eco.ceiling !== ceiling || eco.current !== want) await update($, economyAtom, x => ({ ...x, ceiling, current: want }))
@@ -1739,7 +1743,6 @@ export const register: Register = (on, options) => {
       }
     }
     const r = yield* next(send)
-    // Accounting must never break a request: everything below is best effort.
     try {
       const usage = (r as { usage?: StepUsage | null } | undefined)?.usage ?? null
       const main = !e.agentId
@@ -1760,7 +1763,7 @@ export const register: Register = (on, options) => {
           savedEffortUsd: economyTurn.savedEffortUsd + (saved * priceFor(e.model).out) / 1e6,
         }
       } else if (!main && eco.active.split && usage) {
-        // Without Economy: the conversation's model (Explore: Haiku) and effort; same tokens, output rescaled.
+        // Baseline without Economy: the main model (Explore runs on Haiku) and its effort; output rescaled by effort.
         const type = agentTypes.get(e.agentId ?? '') ?? ''
         const baseModel = type === 'Explore' ? 'haiku' : lastMainModel || e.model
         const subEffort: Level = isLevel(e.effort) ? e.effort : 'high'
@@ -1768,19 +1771,44 @@ export const register: Register = (on, options) => {
         const scale = EFFORT_FACTOR[baseEffort] / EFFORT_FACTOR[subEffort]
         const cost = stepCost(usage, e.model, false)
         const base = stepCost(usage, baseModel, false, scale)
-        // A model priced above the conversation's is the user's pick (the rubric never chooses one): kept apart.
         economyTurn =
           priceFor(e.model).out > priceFor(baseModel).out
             ? { ...economyTurn, upCost: economyTurn.upCost + cost, upBaseline: economyTurn.upBaseline + base }
             : { ...economyTurn, subCost: economyTurn.subCost + cost, subBaseline: economyTurn.subBaseline + base }
       }
     } catch {
-      // no stats for this step
     }
     return r
   })
 
-  // Subagent: Haiku only in its roles; no effort given = the role's default instead of inheriting e.g. xhigh.
+  on('tool.call', { tool: /^(Edit|Write|MultiEdit)$/ }, async ($, e, next) => {
+    const path = String((e as { file_path?: unknown }).file_path ?? '')
+    const rel = path ? await projectRelative($, path) : null
+    if (!rel) return next(e)
+    const checksOn = (await read($, qualityAtom)).checks
+    const before = await readOrEmpty($, path)
+    const r = await next(e)
+    if (!('result' in r) || r.isError) return r
+    if (isCode(rel) && (await read($, tasksAtom)).length) codeUnderTasks = true
+    if (!checksOn) return r
+    try {
+      const note = await editNote($, path, rel, before)
+      if (note) checkReports = { count: checkReports.count + 1, last: rel }
+      return note ? ({ ...r, context: [...(r.context ?? []), note] } as typeof r) : r
+    } catch {
+      return r
+    }
+  }).catch(($, e, next) => next(e))
+
+  on('tool.check', { tool: 'Write' }, async ($, e, next) => {
+    const path = String((e.input as { file_path?: unknown } | null)?.file_path ?? '')
+    if (!/\.md$/i.test(path)) return next(e)
+    const rel = await projectRelative($, path)
+    if (!rel || !(await read($, qualityAtom)).checks || (await $.fs.exists(path))) return next(e)
+    if (markdownAllowed(await projectChecks($), rel)) return next(e)
+    return { decision: 'ask', reason: MARKDOWN_REASON }
+  }).catch(($, e, next) => next(e))
+
   on('tool.call', { tool: 'Agent' }, async ($, e, next) => {
     if (e.agentId || e.tool !== 'Agent' || !(await read($, economyAtom)).active.split) return next(e)
     const type = e.subagent_type ?? 'general-purpose'
@@ -1792,7 +1820,6 @@ export const register: Register = (on, options) => {
     return next({ ...e, ...(model ? { model: model as 'sonnet' | 'opus' | 'haiku' | 'fable' } : {}), effort })
   }).catch(($, e, next) => next(e))
 
-  // The same when a subagent starts (Haiku outside its roles → Sonnet).
   on('agent.spawn', async ($, e, next) => {
     if (e.fork || e.workflow || !(await read($, economyAtom)).active.split) return next(e)
     const model = subagentModel(e.model, e.subagentType)
@@ -1808,11 +1835,16 @@ export const register: Register = (on, options) => {
     if (e.requestId !== KOKPIT_PANE) return next(e)
     const { Box, Text, Button } = $.ui.resolve(e)
     const tab = await read($, tabAtom)
-    const root = await $.session.root()
+    const help = await read($, helpAtom)
+    const root = (await $.session.root()).replace(/\/+$/, '')
+    const project = await projectRoot($)
     const narrow = e.props.bodyColumns < 90
-    const L = narrow ? 14 : 22
+    const L = narrow ? 18 : 28
 
-    // A "label — value" row with a fixed-width column (aligns in the terminal and in the app).
+    const name = (path: string) => path.split('/').pop() || path
+    const title = (text: string) => <Text bold>{text}</Text>
+    const gap = <Text> </Text>
+    const explain = (text: string) => (help ? <Text dimColor wrap="wrap">{text}</Text> : '')
     const row = (key: string, label: string, value: string, color?: string) => (
       <Box key={key} flexDirection="row">
         <Box width={L}>
@@ -1834,12 +1866,52 @@ export const register: Register = (on, options) => {
         )}
       </Box>
     )
+    const toggle = (key: string, label: string, enabled: boolean, flip: () => unknown, note = '') => (
+      <Box flexDirection="row" columnGap={2}>
+        <Box width={L}>
+          <Text>{label}</Text>
+        </Box>
+        {enabled ? (
+          <Button key={key} label="● On " onPress={flip} />
+        ) : (
+          <Button key={key} label="○ Off" plain onPress={flip} />
+        )}
+        {note ? <Text dimColor wrap="wrap">{note}</Text> : ''}
+      </Box>
+    )
+    const table = (key: string, head: string[], widths: number[], rows: { cells: string[]; color?: string }[]) => (
+      <Box key={key} flexDirection="column">
+        <Box flexDirection="row">
+          {head.map((label, i) => (
+            <Box key={`${key}-h${i}`} width={widths[i]}>
+              <Text dimColor>{label}</Text>
+            </Box>
+          ))}
+        </Box>
+        {rows.map((r, n) => (
+          <Box key={`${key}-r${n}`} flexDirection="row">
+            {r.cells.map((c, i) => (
+              <Box key={`${key}-r${n}c${i}`} width={widths[i]}>
+                <Text color={i === 0 ? undefined : r.color} wrap="truncate-end">
+                  {c}
+                </Text>
+              </Box>
+            ))}
+          </Box>
+        ))}
+      </Box>
+    )
 
     const header = (
       <Box flexDirection="column">
-        {choice('tab-', TABS, tab, t => update($, tabAtom, () => t))}
-        <Text dimColor>{`Kokpit ${pluginVersion || '?'} · ${root} · Tab moves between buttons, Esc closes`}</Text>
-        <Text> </Text>
+        <Box flexDirection="row" columnGap={2} flexWrap="wrap">
+          {choice('tab-', TABS, tab, t => update($, tabAtom, () => t))}
+          <Button key="kokpit-help" label={help ? '? Hide help' : '? Help'} plain onPress={() => update($, helpAtom, shown => !shown)} />
+        </Box>
+        <Text dimColor>
+          {`Kokpit ${pluginVersion || '?'} · ${name(project)}` + (root !== project ? ` · worktree ${name(root)}` : '')}
+        </Text>
+        {gap}
       </Box>
     )
 
@@ -1848,85 +1920,82 @@ export const register: Register = (on, options) => {
       const local = await read($, localAtom)
       const s = eco.saved
       const differs = (Object.keys(s) as (keyof EconomySettings)[]).some(key => s[key] !== eco.active[key])
-      const toggle = (key: string, title: string, enabled: boolean, flip: () => unknown) => (
-        <Box flexDirection="row" columnGap={2}>
-          <Box width={L + 6}>
-            <Text bold>{title}</Text>
-          </Box>
-          <Text color={enabled ? 'green' : undefined}>{enabled ? '● on' : '○ off'}</Text>
-          <Button key={key} label={enabled ? 'Turn off' : 'Turn on'} onPress={flip} />
-        </Box>
-      )
+      const ollama =
+        local === null
+          ? 'checking…'
+          : !local.ollama
+            ? 'Ollama not running'
+            : `${local.models.length} models · opencode ${local.opencode ? '✓' : '✗ (text only)'}`
       return (
         <Box flexDirection="column">
           {header}
-          <Text dimColor>Settings of this project (shared by its worktrees).</Text>
-          <Text> </Text>
+          {title('Model and effort')}
           {toggle('eco-split', 'Split across subagents', s.split, () => saveEconomy($, x => ({ ...x, split: !x.split })))}
-          <Text dimColor wrap="wrap">
-            Claude splits a large task into subtasks and picks Opus or Sonnet and an effort level for each subagent from
-            a rubric. Haiku only in three roles: Explore (searches), kokpit:reporter (reports test output verbatim),
-            kokpit:mechanic (pattern-driven change with a check; stops instead of guessing). A failed tool call in a
-            subagent raises its effort.
-          </Text>
-          <Text> </Text>
+          {explain(
+            'Large tasks go to subagents; Claude picks Opus or Sonnet and an effort for each from a rubric. Haiku only ' +
+              'as Explore, kokpit:reporter (test output verbatim) and kokpit:mechanic (a pattern-driven change with a ' +
+              'check). A failed tool call raises a subagent’s effort.',
+          )}
           {toggle('eco-effort', 'Dynamic effort', s.effort, () => saveEconomy($, x => ({ ...x, effort: !x.effort })))}
-          <Text dimColor wrap="wrap">
-            For every request Claude rates the difficulty: simple → the lowest level, medium → high, hard → the highest.
-            A failed tool call raises it one level; plan mode stays at the highest. Only 5.5 models and Fable 5.1 (no
-            cache loss).
-          </Text>
-          <Box flexDirection="row">
-            <Box width={L + 6}>
-              <Text dimColor>Lowest level</Text>
+          {s.effort ? (
+            <Box flexDirection="row">
+              <Box width={L}>
+                <Text dimColor>  lowest</Text>
+              </Box>
+              {choice('eco-floor-', (['low', 'medium', 'high'] as Level[]).map(l => ({ id: l, label: l })), s.floor, l =>
+                saveEconomy($, x => ({ ...x, floor: l })),
+              )}
             </Box>
-            {choice('eco-floor-', (['low', 'medium', 'high'] as Level[]).map(l => ({ id: l, label: l })), s.floor, l =>
-              saveEconomy($, x => ({ ...x, floor: l })),
-            )}
-          </Box>
-          <Box flexDirection="row">
-            <Box width={L + 6}>
-              <Text dimColor>Highest level</Text>
-            </Box>
-            {choice(
-              'eco-ceiling-',
-              [
-                { id: 'session' as Level | 'session', label: 'as in session' },
-                ...(['high', 'xhigh', 'max'] as Level[]).map(l => ({ id: l as Level | 'session', label: l })),
-              ],
-              s.ceiling,
-              l => saveEconomy($, x => ({ ...x, ceiling: l })),
-            )}
-          </Box>
-          <Text> </Text>
-          {toggle('eco-local', 'Local model (Ollama)', s.local, () => saveEconomy($, x => ({ ...x, local: !x.local })))}
-          <Text dimColor wrap="wrap">
-            {local === null
-              ? 'Checking Ollama…'
-              : !local.ollama
-                ? 'Ollama does not respond (`ollama list`): start it, then "Refresh list".'
-                : `Text directly through Ollama, code through opencode in a separate worktree (a diff to review). opencode: ${local.opencode ? 'found' : 'missing, text only'}.`}
-          </Text>
-          <Box flexDirection="row" flexWrap="wrap">
-            <Box width={L + 6}>
-              <Text dimColor>{`Model: ${s.localModel || '—'}`}</Text>
-            </Box>
-            {local && local.models.length
-              ? choice('eco-model-', local.models.map(m => ({ id: m, label: m })), s.localModel, m =>
-                  saveEconomy($, x => ({ ...x, localModel: m })),
-                )
-              : ''}
-            <Button key="eco-local-refresh" label="Refresh list" plain onPress={() => refreshLocal($)} />
-          </Box>
-          {s.local && !s.localModel ? <Text color="yellow">Pick a model: the local model does nothing without one.</Text> : ''}
-          <Text> </Text>
-          {differs ? (
-            <Text color="yellow" wrap="wrap">
-              Changes take effect in a new conversation or after /clear (mid-conversation they would change the prompt
-              and burn the cache).
-            </Text>
           ) : (
-            <Text dimColor>This conversation runs with the settings above.</Text>
+            ''
+          )}
+          {s.effort ? (
+            <Box flexDirection="row">
+              <Box width={L}>
+                <Text dimColor>  highest</Text>
+              </Box>
+              {choice(
+                'eco-ceiling-',
+                [
+                  { id: 'session' as Level | 'session', label: 'session' },
+                  ...(['high', 'xhigh', 'max'] as Level[]).map(l => ({ id: l as Level | 'session', label: l })),
+                ],
+                s.ceiling,
+                l => saveEconomy($, x => ({ ...x, ceiling: l })),
+              )}
+            </Box>
+          ) : (
+            ''
+          )}
+          {explain(
+            'Claude rates each request: simple → lowest, medium → high, hard → highest. A failed tool call raises it ' +
+              'one level; plan mode stays at the highest. Only on 5.5 models and Fable 5.1, where changing effort keeps the cache.',
+          )}
+          {gap}
+          {title('Local model')}
+          {toggle('eco-local', 'Ollama', s.local, () => saveEconomy($, x => ({ ...x, local: !x.local })), ollama)}
+          {s.local ? (
+            <Box flexDirection="row" flexWrap="wrap">
+              <Box width={L}>
+                <Text dimColor>  model</Text>
+              </Box>
+              {local && local.models.length
+                ? choice('eco-model-', local.models.map(m => ({ id: m, label: m })), s.localModel, m =>
+                    saveEconomy($, x => ({ ...x, localModel: m })),
+                  )
+                : ''}
+              <Button key="eco-local-refresh" label="Refresh" plain onPress={() => refreshLocal($)} />
+            </Box>
+          ) : (
+            ''
+          )}
+          {s.local && !s.localModel ? <Text color="yellow">Pick a model: without one the local model does nothing.</Text> : ''}
+          {explain('Text through Ollama directly; code through opencode in its own worktree, returned as a diff to review.')}
+          {gap}
+          {differs ? (
+            <Text color="yellow">Takes effect in a new conversation or after /clear (keeps this one’s cache).</Text>
+          ) : (
+            <Text dimColor>Settings of this project, shared by its worktrees.</Text>
           )}
         </Box>
       )
@@ -1939,16 +2008,11 @@ export const register: Register = (on, options) => {
       const planName = PLAN_NAME[plan]
       const v = st && cal ? statsView(st, cal.calibration) : null
       const planRow = (
-        <Box flexDirection="row">
-          <Box width={L}>
-            <Text dimColor>Your plan</Text>
-          </Box>
-          {choice(
-            'eco-plan-',
-            (['pro', 'x5', 'x20'] as Plan[]).map(p => ({ id: p, label: PLAN_NAME[p] })),
-            plan,
-            p => setPlan($, p),
+        <Box flexDirection="row" columnGap={2} flexWrap="wrap">
+          {choice('eco-plan-', (['pro', 'x5', 'x20'] as Plan[]).map(p => ({ id: p, label: PLAN_NAME[p] })), plan, p =>
+            setPlan($, p),
           )}
+          {v && v.steps ? <Text dimColor>{`since ${v.since.slice(0, 10)} · ${v.steps.toLocaleString('en-US')} steps`}</Text> : ''}
         </Box>
       )
       if (!v || (v.steps === 0 && !v.subagents.length)) {
@@ -1956,105 +2020,157 @@ export const register: Register = (on, options) => {
           <Box flexDirection="column">
             {header}
             {planRow}
-            <Text> </Text>
+            {gap}
             <Text dimColor>Nothing yet: stats are collected while Economy is on.</Text>
           </Box>
         )
       }
       const sign = (n: number) => (n >= 0 ? 'green' : 'red')
+      const W = narrow ? [18, 16, 30] : [22, 18, 44]
+      const sources: { cells: string[]; color?: string }[] = [
+        {
+          cells: [
+            'Dynamic effort',
+            v.lowered ? range(v.effort.usd, usd) : '—',
+            v.lowered ? `${v.lowered} of ${v.steps} steps lower` : 'no step below the highest level',
+          ],
+          color: 'green',
+        },
+        {
+          cells: [
+            'Subagent routing',
+            v.sub ? usd(v.sub.usd) : '—',
+            v.sub ? `${v.sub.pct >= 0 ? '−' : '+'}${Math.abs(Math.round(v.sub.pct))}% vs the conversation’s model` : 'no subagents yet',
+          ],
+          color: v.sub ? sign(v.sub.usd) : undefined,
+        },
+      ]
+      if (v.upgrade) {
+        sources.push({ cells: ['Your picks', '+' + usd(v.upgrade.usd), 'subagents above the conversation’s model, not counted'], color: 'yellow' })
+      }
       return (
         <Box flexDirection="column">
           {header}
           {planRow}
-          {row('st-period', 'Period', `since ${v.since.slice(0, 10)} · ${v.steps.toLocaleString('en-US')} main-conversation steps`)}
-          <Text> </Text>
-          <Text bold>{`Savings on ${planName} (estimate)`}</Text>
-          {v.week
-            ? row('st-week', 'Week', `${range(v.week.percent, pct)} of the weekly limit`, v.total.hi >= 0 ? 'green' : 'red')
-            : row('st-week', 'Week', `after calibration: ${pct(v.measured)} of the week measured, 3% needed`)}
-          {row('st-total', 'Total', `${range(v.total, usd)} at API prices`, sign(v.total.lo))}
-          {row(
-            'st-effort',
-            'Dynamic effort',
-            v.lowered
-              ? `${range(v.effort.tokens, compact)} fewer output tokens · ${range(v.effort.usd, usd)} · ${v.lowered} of ${v.steps} steps lower`
-              : 'none: no step went below the highest level',
-          )}
-          {row(
-            'st-sub',
-            'Subagents',
-            v.sub
-              ? `${usd(v.sub.usd)} (${v.sub.pct >= 0 ? '−' : '+'}${Math.abs(Math.round(v.sub.pct))}% cost versus the same tasks on the conversation's model)`
-              : 'no data',
-            v.sub ? sign(v.sub.usd) : undefined,
-          )}
-          {v.upgrade
-            ? row(
-                'st-up',
-                'Your picks',
-                `+${usd(v.upgrade.usd)} for subagents on a model above the conversation's (not counted above)`,
-                'yellow',
-              )
-            : ''}
-          <Text> </Text>
-          <Text bold>Steps by effort</Text>
-          <Box flexDirection="row">
-            <Box width={L}>
-              <Text dimColor>level</Text>
-            </Box>
-            <Box width={12}>
-              <Text dimColor>steps</Text>
-            </Box>
-            <Text dimColor>avg output tokens</Text>
+          {gap}
+          <Box flexDirection="row" columnGap={3} flexWrap="wrap">
+            <Text>
+              <Text dimColor>Week </Text>
+              {v.week ? (
+                <Text bold color={sign(v.total.hi)}>{range(v.week.percent, pct)}</Text>
+              ) : (
+                <Text dimColor>{`calibrating (${pct(v.measured)} of 3%)`}</Text>
+              )}
+            </Text>
+            <Text>
+              <Text dimColor>Total </Text>
+              <Text bold color={sign(v.total.lo)}>{range(v.total, usd)}</Text>
+            </Text>
+            <Text dimColor>{`saved on ${planName}, at API prices`}</Text>
           </Box>
-          {v.levels.map(p => (
-            <Box key={'st-lv-' + p.level} flexDirection="row">
-              <Box width={L}>
-                <Text>{p.level}</Text>
-              </Box>
-              <Box width={12}>
-                <Text>{p.steps.toLocaleString('en-US')}</Text>
-              </Box>
-              <Text>{p.avgOut.toLocaleString('en-US')}</Text>
-            </Box>
-          ))}
-          {row('st-ratings', 'Difficulty ratings', `simple ${v.ratings.simple} · medium ${v.ratings.medium} · hard ${v.ratings.hard}`)}
-          {v.subagents.length ? row('st-subl', 'Subagents (model/effort)', v.subagents.map(x => `${x.key} ${x.n}`).join(' · ')) : ''}
-          {v.week
-            ? row(
-                'st-cal',
-                'Calibration',
-                `${planName} week ≈ ${usd(v.week.usd)} at API prices · ${v.week.samples} samples over ${pct(v.week.measured)} of the week`,
-              )
+          {gap}
+          {table('st-src', ['Source', 'Saved', 'Detail'], W, sources)}
+          {gap}
+          {table(
+            'st-lv',
+            ['Effort', 'Steps', 'Avg output'],
+            W,
+            v.levels.map(p => ({ cells: [p.level, p.steps.toLocaleString('en-US'), p.avgOut.toLocaleString('en-US')] })),
+          )}
+          {gap}
+          {row('st-ratings', 'Ratings', `simple ${v.ratings.simple} · medium ${v.ratings.medium} · hard ${v.ratings.hard}`)}
+          {v.subagents.length
+            ? row('st-subl', 'Subagents', v.subagents.slice(0, 6).map(x => `${x.key} ${x.n}`).join(' · '))
             : ''}
-          {v.unknownModels ? row('st-unk', 'Note', `${v.unknownModels} steps on models missing from the price list (priced as Opus 5.5)`, 'yellow') : ''}
-          <Text> </Text>
-          <Text dimColor wrap="wrap">
-            How this is computed: tokens and their kind (input, cache, output) are measured for every request and priced
-            with the API price list. Two things are estimates. Effort: how much more thinking a step at the highest level
-            would have produced, hence the ranges (high 1.2–1.6×, xhigh 1.5–2.5×, max 1.8–3.2× of medium output).
-            Subagents: the same tokens on the conversation's model and effort (Explore against Haiku); subagents you put on
-            a more expensive model than the conversation's (e.g. Fable) are your choice, shown apart. Share of the week:
-            the measured cost of all requests against the rise of the weekly counter on the selected plan; usage from
-            other devices and chats in the meantime inflates it.
-          </Text>
-          <Box flexDirection="row" columnGap={2}>
-            <Button
-              key="eco-reset"
-              label="Reset stats"
-              plain
-              onPress={async () => {
-                const fresh = emptyStats(new Date(await $.clock.now()).toISOString())
-                await $.store.set(await statsKey($), fresh)
-                await update($, economyStatsAtom, () => fresh)
-              }}
-            />
-          </Box>
+          {v.unknownModels ? row('st-unk', 'Note', `${v.unknownModels} steps on unpriced models (counted as Opus 5.5)`, 'yellow') : ''}
+          {help && v.week
+            ? row('st-cal', 'Calibration', `${planName} week ≈ ${usd(v.week.usd)} · ${v.week.samples} samples over ${pct(v.week.measured)}`)
+            : ''}
+          {explain(
+            'Every request’s tokens are measured and priced with the API price list. Estimates: effort (how much more a ' +
+              'step at the highest level would think: high 1.2–1.6×, xhigh 1.5–2.5×, max 1.8–3.2× of medium) and ' +
+              'subagents (the same tokens on the conversation’s model and effort; Explore against Haiku). Subagents you ' +
+              'put on a pricier model than the conversation’s are your picks, shown apart. The week share compares the ' +
+              'measured cost with the rise of the weekly counter; usage on other devices inflates it.',
+          )}
+          {gap}
+          <Button
+            key="eco-reset"
+            label="Reset stats"
+            plain
+            onPress={async () => {
+              const fresh = emptyStats(new Date(await $.clock.now()).toISOString())
+              await $.store.set(await statsKey($), fresh)
+              await update($, economyStatsAtom, () => fresh)
+            }}
+          />
         </Box>
       )
     }
 
-    // Handoff and tools
+    if (tab === 'quality') {
+      const q = await read($, qualityAtom)
+      const c = await projectChecks($)
+      const map = await featureMap($)
+      const checksNoteText = !c.enabled
+        ? 'off in .claude/kokpit.json ("checks": false)'
+        : [
+            c.lint.length ? `linter on ${c.lint.map(r => r.files.join(', ')).join('; ')}` : 'no linter',
+            c.suppressions ? 'suppressions' : '',
+            c.excuses ? 'workaround comments' : '',
+            c.patterns.length ? `${c.patterns.length} patterns` : '',
+            c.markdown ? 'new markdown' : '',
+          ]
+            .filter(Boolean)
+            .join(' · ')
+      return (
+        <Box flexDirection="column">
+          {header}
+          {title('This project')}
+          {toggle('q-checks', 'Checks after every edit', q.checks, () => saveQuality($, x => ({ ...x, checks: !x.checks })), checksNoteText)}
+          {explain(
+            'After each Edit or Write Kokpit runs the project’s linter on the changed lines and flags added checker ' +
+              'suppressions, workaround comments and forbidden patterns; a new markdown file outside the document ' +
+              'places asks first. Silent when clean. The rules live in the checks section of .claude/kokpit.json.',
+          )}
+          {toggle(
+            'q-verify',
+            'Offer verification',
+            q.verify,
+            () => saveQuality($, x => ({ ...x, verify: !x.verify })),
+            map ? `${map.dir}: ${map.pages} feature page${map.pages === 1 ? '' : 's'}` : 'no feature map yet',
+          )}
+          {explain(
+            'When a task list completes after code changed, the band offers Verify: /kokpit:verify hands each affected ' +
+              'feature of the map to a fresh agent that drives the app and saves evidence.',
+          )}
+          {toggle('q-lessons', 'Lessons at handoff', q.lessons, () => saveQuality($, x => ({ ...x, lessons: !x.lessons })), 'proposals to the decision register')}
+          {explain(
+            'A handoff proposes at most three skills or checks from what you corrected or asked for again. You accept ' +
+              'them in /decisions; nothing is written during the handoff.',
+          )}
+          {gap}
+          {title('This session')}
+          {row(
+            'q-reports',
+            'Check reports',
+            checkReports.count ? `${checkReports.count} · last on ${checkReports.last}` : 'none',
+            checkReports.count ? 'yellow' : undefined,
+          )}
+          {c.enabled && !c.lint.length ? (
+            <Text color="yellow" wrap="wrap">
+              No linter runs on edits yet: /kokpit:setup project sets the quality bar for this repo.
+            </Text>
+          ) : (
+            ''
+          )}
+          {!map ? <Text dimColor wrap="wrap">A feature map comes with /kokpit:setup project (audit item “proof”).</Text> : ''}
+          {gap}
+          <Text dimColor>Applies at once, to this project on this machine.</Text>
+        </Box>
+      )
+    }
+
     const usage = await read($, usageAtom)
     const log = ((await $.store.get('log')) as HandoffLogEntry[] | undefined) ?? []
     const win = usage?.contextWindow ?? 200_000
@@ -2063,19 +2179,19 @@ export const register: Register = (on, options) => {
     return (
       <Box flexDirection="column">
         {header}
-        <Text bold>Handoff</Text>
-        {row('h-mode', 'Mode', mode === 'auto' ? 'auto: by itself after the threshold' : mode === 'break' ? 'break: by itself after a finished task' : 'button')}
-        {row('h-thr', 'Thresholds', `soft ${k(threshold)}, hard ${k(hardThresholdFor(threshold, hardSetting, win))} tokens`)}
+        {title('Handoff')}
+        {row('h-mode', 'Mode', mode === 'auto' ? 'auto, after the threshold' : mode === 'break' ? 'break, after a finished task' : 'button only')}
+        {row('h-thr', 'Thresholds', `soft ${k(threshold)} · hard ${k(hardThresholdFor(threshold, hardSetting, win))} tokens`)}
         {row('h-clear', 'Clearing', clearMode === 'message' ? 'on your next message' : 'with the button')}
-        {row('h-lang', 'Language', language === 'pl' ? 'Polish (new threads, register, templates)' : 'English (new threads, register, templates)')}
-        {row('h-stats', 'Stats', stats(log, await $.clock.now()))}
-        <Text dimColor wrap="wrap">To change these: /plugin configure kokpit@kokpit in a terminal (or /config → Kokpit).</Text>
-        <Text> </Text>
-        <Text bold>Tools</Text>
+        {row('h-lang', 'Language', language === 'pl' ? 'Polish' : 'English')}
+        {row('h-stats', 'History', stats(log, await $.clock.now()))}
+        {explain('Change these in /plugin → kokpit → Configure, then /reload-plugins. Language applies to new threads, register entries and templates.')}
+        {gap}
+        {title('Tools')}
         <Box flexDirection="row" columnGap={2} flexWrap="wrap">
           <Button
             key="h-decisions"
-            label={`Decision register${decisions ? ` (${decisions.pending} pending)` : ''}`}
+            label={`Decisions${decisions ? ` (${decisions.pending})` : ''}`}
             onPress={() => $.ui.open({ id: DECISIONS_PANE, title: 'Decisions', focus: true, closeOnEscape: true })}
           />
           <Button
@@ -2107,7 +2223,6 @@ export const register: Register = (on, options) => {
     if (!e.agentId) {
       askedThisTurn = false
       turnRunning = true
-      // A new request: the first step goes at the session level; only the model's rating lowers it.
       const eco = await read($, economyAtom)
       if (eco.active.effort && (eco.rating !== null || eco.bumps > 0)) {
         await update($, economyAtom, x => ({ ...x, rating: null, reason: '', bumps: 0 }))
@@ -2117,17 +2232,19 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
-  // End of a turn: this is where the automatic handoff is decided.
   on('turn.complete', async ($, e, next) => {
     const r = await next(e)
     if (e.agentId) return r
     turnRunning = false
     await flushEconomyStats($).catch(() => {})
-    // The turn in which a handoff was written always closes it, also when aborted or without a save.
+    const tasks = await read($, tasksAtom)
+    if (codeUnderTasks && !e.isAborted && tasks.length && isFinished(tasks)) {
+      codeUnderTasks = false
+      if ((await read($, qualityAtom)).verify) await update($, verifyOfferAtom, () => true)
+    }
     const wasRunning = (await read($, handoffAtom)).running
     if (wasRunning) await finishHandoff($, e.isAborted, e.answer ?? '')
     else if (!e.isAborted) {
-      // Answers to keep on clearing (handoff turns excluded) and whether the turn ended with a question.
       const answer = (e.answer ?? '').trim()
       if (answer) {
         const at = new Date(await $.clock.now()).toISOString()
@@ -2136,11 +2253,9 @@ export const register: Register = (on, options) => {
       const awaiting = askedThisTurn || endsWithQuestion(answer)
       if ((await read($, handoffAtom)).awaiting !== awaiting) await update($, handoffAtom, x => ({ ...x, awaiting }))
     }
-    // This turn's background results: after a question (or a handoff) they wait for the user, otherwise go to Claude.
     await releaseAfterTurn($, wasRunning || (await read($, handoffAtom)).awaiting)
     const h = await read($, handoffAtom)
     if (h.savedPath && e.turnId === h.savedTurnId) {
-      // This turn saved the thread. A successful refresh before /clear → clear and resume, outside this event.
       if (h.clearAfter) {
         const path = h.savedPath
         $.clock.after(0, () => clearAndResume($, path))
@@ -2149,9 +2264,7 @@ export const register: Register = (on, options) => {
     }
     if (wasRunning) return r
     if (h.savedPath && !h.stale) await update($, handoffAtom, x => ({ ...x, stale: true }))
-    // In plan mode nothing is written; the handoff and /clear wait.
     if (h.planMode) return r
-    // "Clear and resume" was waiting for background work: once done, its results are in the conversation, so refresh and clear.
     if (h.clearWhenIdle) {
       if (h.savedPath && (await backgroundWork($)).length === 0) {
         await update($, handoffAtom, x => ({ ...x, clearWhenIdle: false }))
@@ -2160,7 +2273,6 @@ export const register: Register = (on, options) => {
       return r
     }
     if (e.isAborted) return r
-    // A handoff requested in plan mode starts at the end of the first turn after it.
     if (h.afterPlan) {
       await update($, handoffAtom, x => ({ ...x, afterPlan: false }))
       $.clock.after(0, () => startHandoff($, 'button'))
@@ -2172,15 +2284,14 @@ export const register: Register = (on, options) => {
     const soft = thresholdFor(tokensSetting, usage.contextWindow)
     const hard = hardThresholdFor(soft, hardSetting, usage.contextWindow)
     const now = await read($, handoffAtom)
-    // Finished = nothing waits for the user's answer, and in "break" mode the whole list is also checked off.
     const finished = !now.awaiting && (mode === 'auto' || isFinished(await read($, tasksAtom)))
     if (!autoDue(usage.contextTokens, soft, hard, now, finished)) return r
-    // Outside the current event: the turn has to close first.
+    // After the current event: the turn has to close first.
     $.clock.after(0, () => startHandoff($, mode))
     return r
   })
 
-  // ── Task list: TaskCreate / TaskUpdate (current tools) and TodoWrite (older) ──
+  // ── Task list (TaskCreate/TaskUpdate; TodoWrite on older engines) ──
   on('tool.call', { tool: 'TaskCreate' }, async ($, e, next) => {
     const r = await next(e)
     if (!r.isError && r.result && 'task' in r.result) {
@@ -2207,8 +2318,7 @@ export const register: Register = (on, options) => {
     return r
   }).catch(($, e, next) => next(e))
 
-  // The desktop app's task list: the model keeps it with the app's tool, not TaskCreate.
-  // Without this Kokpit saw an empty list and took every turn end for a break.
+  // The desktop app keeps the task list with its own tool, not TaskCreate.
   on('tool.call', { tool: 'mcp__ccd_turn__update_plan' }, async ($, e, next) => {
     const r = await next(e)
     if (!r.isError) await update($, tasksAtom, ts => applyPlan(ts, e as unknown as PlanCall))
@@ -2226,27 +2336,24 @@ export const register: Register = (on, options) => {
     return r
   }).catch(($, e, next) => next(e))
 
-  // Writing a thread needs no permission prompt: only a .md file directly in <project>/.claude/handoffs/.
   on('tool.check', { tool: ['Write', 'Edit'] }, async ($, e, next) => {
     const path = (e.input as { file_path?: unknown } | null)?.file_path
     if (typeof path === 'string' && isHandoffPath(path, await $.session.root())) return { decision: 'allow' }
     return next(e)
   }).catch(($, e, next) => next(e))
 
-  // ── Writing the thread file during a handoff = the handoff is done ──
   on('tool.call', { tool: ['Write', 'Edit'] }, async ($, e, next) => {
     const r = await next(e)
     if (r.isError || (e.tool !== 'Write' && e.tool !== 'Edit')) return r
     const path = e.file_path.startsWith('/') ? e.file_path : (await $.session.cwd()).replace(/\/+$/, '') + '/' + e.file_path
     if (path.endsWith('/' + decisionsFile) || path === decisionsFile) await refreshDecisions($, decisionsFile)
     if (path.includes('/' + HANDOFF_DIR + '/') && !path.includes('/.previous/') && !path.includes('/.poprzednie/') && isThreadFile(path)) {
-      // Edits of a thread outside a handoff (e.g. a manual fix) do not pose as a finished handoff.
       if ((await read($, handoffAtom)).running) await noteSaved($, path)
     }
     return r
   }).catch(($, e, next) => next(e))
 
-  // ── "Previous answers" pane: the file saved before an automatic clear ──
+  // ── Previous answers pane ──
   on('ui.render', { component: 'Pane' }, async ($, e, next) => {
     if (e.requestId !== PREVIOUS_PANE) return next(e)
     const { Text, Markdown } = $.ui.resolve(e)
@@ -2255,7 +2362,6 @@ export const register: Register = (on, options) => {
     try {
       text = file ? await $.fs.read(file) : ''
     } catch {
-      // the file was removed: show that there is nothing
     }
     return text ? <Markdown text={text} /> : <Text dimColor>No saved answers from before a clear.</Text>
   })
@@ -2343,7 +2449,7 @@ export const register: Register = (on, options) => {
     if (e.requestId !== DECISIONS_PANE) return next(e)
     const els = $.ui.resolve(e)
     const { Box, Text, Button } = els
-    // The text field exists in the terminal and the desktop app; elsewhere only the buttons remain.
+    // Input exists only in the terminal and the desktop app.
     const Input = 'Input' in els ? els.Input : null
     const ds = await readDecisions($, decisionsFile)
     const open = pending(ds)
@@ -2624,11 +2730,31 @@ export const register: Register = (on, options) => {
       )
     }
 
+    const verifyRow =
+      (await read($, verifyOfferAtom)) && !e.props.isWorking ? (
+        <Box flexDirection="row" columnGap={2}>
+          <Text>✓ Tasks done: prove the change works the way its user meets it?</Text>
+          <Button
+            key="kokpit-verify"
+            label="Verify"
+            hotkey="3"
+            onPress={async () => {
+              await update($, verifyOfferAtom, () => false)
+              await runSkill($, 'verify', '')
+            }}
+          />
+          <Button key="kokpit-verify-no" label="Not now" plain onPress={() => update($, verifyOfferAtom, () => false)} />
+        </Box>
+      ) : (
+        ''
+      )
+
     return (
       <Box flexDirection="column">
         {meters}
         {jobRows}
         {inboxRows}
+        {verifyRow}
         {action}
       </Box>
     )

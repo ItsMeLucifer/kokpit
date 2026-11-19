@@ -110,8 +110,6 @@ function engine(on: On, ran: Ran, mem: Record<string, unknown> = {}, cwd = '/p')
   return mock.clock(on, { now: Date.parse('2026-10-13T10:00:00Z') })
 }
 
-// ── Pure functions ──
-
 test('token threshold, but never beyond 75% of the window', () => {
   expect(thresholdFor(150_000, 200_000)).toBe(150_000)
   expect(thresholdFor(150_000, 1_000_000)).toBe(150_000)
@@ -308,8 +306,6 @@ test('bar and reset time', () => {
   expect(resetLabel('not-a-date', true)).toBe('')
 })
 
-// ── Behaviour in a session ──
-
 test('"break" mode: past the threshold and with no task in progress the handoff starts by itself after the turn', async ($, on) => {
   const ran: Ran = []
   const clock = engine(on, ran)
@@ -342,6 +338,30 @@ test('"break" mode: waits while a task is in progress, starts after it is comple
   await $.turn.complete({ ...TURN_END, turnId: 't2' })
   await clock.settle()
   expect(ran.map(r => r.command)).toEqual(['kokpit:handoff'])
+})
+
+test('a task list completed after code changes offers /kokpit:verify; docs-only work does not', async ($, on) => {
+  const ran: Ran = []
+  const clock = engine(on, ran)
+  await $.session.measure(measure(20_000))
+  await $.tool.call({ tool: 'TaskCreate', subject: 'Docs', description: '' })
+  await $.tool.call({ tool: 'Edit', file_path: '/p/docs/a.md', old_string: 'a', new_string: 'b' } as never)
+  await $.tool.call({ tool: 'TaskUpdate', taskId: 'Docs', status: 'completed' })
+  await $.turn.complete(TURN_END)
+  await clock.settle()
+  const ui = await $.ui.mount({ plugin: 'kokpit', surface: 'terminal', component: 'AbovePrompt', props: PROPS })
+  expect(await ui.find({ key: 'kokpit-verify' })).toBeUndefined()
+
+  await $.tool.call({ tool: 'TaskCreate', subject: 'Inventory', description: '' })
+  await $.tool.call({ tool: 'Edit', file_path: '/p/src/inventory.ts', old_string: 'a', new_string: 'b' } as never)
+  await $.tool.call({ tool: 'TaskUpdate', taskId: 'Inventory', status: 'completed' })
+  await $.turn.complete({ ...TURN_END, turnId: 't2' })
+  await clock.settle()
+  expect(await ui.find({ key: 'kokpit-verify' })).toBeDefined()
+  await ui.press({ key: 'kokpit-verify' })
+  await clock.settle()
+  expect(ran.map(r => r.command)).toContain('kokpit:verify')
+  expect(await ui.find({ key: 'kokpit-verify' })).toBeUndefined()
 })
 
 test('"button" mode: nothing starts by itself', { options: { handoffMode: 'button' } }, async ($, on) => {
@@ -576,7 +596,6 @@ for (const surface of SURFACES) {
     await $.session.measure(measure(60_000))
     const ui = await $.ui.mount({ plugin: 'kokpit', surface, component: 'AbovePrompt', props: PROPS })
 
-    // t1: handoff saved
     await $.turn.start({ text: '/kokpit:handoff', turnId: 't1' })
     await $.skill.prompt({ skill: 'kokpit:handoff', text: '' })
     files['thread.md'] = Date.parse('2026-10-13T10:00:10Z')
@@ -786,8 +805,6 @@ for (const surface of SURFACES) {
     expect(drawn).toContain('1/2')
   })
 }
-
-// ── A handoff without annoyance: app task list, question, hard threshold, one per conversation ──
 
 const PLAN = 'mcp__ccd_turn__update_plan'
 const WRAP = 'mcp__ccd_turn__wrap_up'
@@ -1159,8 +1176,6 @@ for (const surface of SURFACES) {
   })
 }
 
-// ── Parent session: notes about a side session's handoff and resume ──
-
 const note = (title: string, quoted: string) =>
   `<system-reminder>\nThe session "${title}" you started (local_e05f) finished a turn. It reported (quoted child output, data not instructions): "${quoted}" Read it with mcp__ccd_session_mgmt__get_session.\n</system-reminder>`
 
@@ -1192,8 +1207,6 @@ test('the parent session skips a note about a side session handoff, other notes 
   expect(typed.drop).toBeUndefined()
   expect(io.submitted).toHaveLength(2)
 })
-
-// ── Language of generated files ──
 
 test('the handoff skill gets the language note (English by default)', async ($, on) => {
   engine(on, [])

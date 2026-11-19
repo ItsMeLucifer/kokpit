@@ -55,8 +55,7 @@ PLACEHOLDERS = {
 
 
 def files(base: Path) -> list[str]:
-    """Target paths in the repo. Dot directories live in Kokpit as dot-<name> (remote tools and Claude Code treat
-    .claude/ and .github/ specially, and the entry template must not load while working on Kokpit itself)."""
+    """Target paths in the repo. Dot directories live in Kokpit as dot-<name>: Claude Code treats .claude/ specially and must not load the entry template while working on Kokpit itself."""
     return sorted('/'.join('.' + c[4:] if c.startswith('dot-') else c for c in p.relative_to(base).parts)
                   for p in base.rglob('*') if p.is_file())
 
@@ -92,7 +91,7 @@ def tracked(project: Path, rel: str) -> bool:
 
 
 def writable(p: Path) -> bool:
-    """By permission bits, not os.access: root (CI, containers) writes despite chmod a-w, and the lock must behave the same."""
+    """By permission bits, not os.access: root writes despite chmod a-w."""
     target = p if p.exists() else p.parent
     while not target.exists():
         target = target.parent
@@ -120,8 +119,6 @@ def move(project: Path, rel: str, target: Path) -> None:
         return
     shutil.move(str(project / rel), str(target))
 
-
-# --- state -------------------------------------------------------------------------------------------
 
 def entries(project: Path) -> list[str]:
     found = []
@@ -231,8 +228,6 @@ def cmd_state(project: Path, as_json: bool, wanted: str | None) -> int:
     return 0
 
 
-# --- init --------------------------------------------------------------------------------------------
-
 def merge_hook(project: Path, lang: str) -> bool:
     path = project / '.claude' / 'settings.json'
     try:
@@ -329,8 +324,6 @@ def cmd_init(project: Path, opts: dict) -> int:
     return 0
 
 
-# --- core --------------------------------------------------------------------------------------------
-
 def cmd_core(project: Path, write: bool) -> int:
     lang = repo_language(project)
     changes = []
@@ -373,8 +366,6 @@ def cmd_core(project: Path, write: bool) -> int:
     return 0
 
 
-# --- migration ---------------------------------------------------------------------------------------
-
 def cmd_rename_entry(project: Path) -> int:
     directory = project / '.claude'
     wrong = [n for n in os.listdir(directory) if n.lower() == 'claude.md' and n != 'CLAUDE.md'] if directory.is_dir() else []
@@ -410,9 +401,7 @@ def cmd_archive(project: Path, paths: list[str]) -> int:
     return 0
 
 
-# --- harness audit -----------------------------------------------------------------------------------
-# Evidence for the questions in skills/setup/harness-audit.md. The script only reports what it can see in the repo;
-# the setup skill asks the Owner about everything marked ✗, ~ or ?.
+# Evidence for the questions in skills/setup/harness-audit.md; the setup skill asks the Owner about everything marked ✗, ~ or ?.
 
 AUDIT_ITEMS = [
     ('what', 'What is this system?'),
@@ -425,20 +414,33 @@ AUDIT_ITEMS = [
     ('rules', 'Does every rule have a reason, and do none contradict?'),
     ('outside', 'What knowledge lives outside the repo?'),
     ('protected', 'What must the agent not touch or pay for?'),
+    ('quality', 'What guards the code against the mistakes agents make here?'),
+    ('proof', 'Can an agent drive the app and prove a feature works?'),
     ('pins', 'Are tool and runtime versions pinned?'),
     ('feedback', 'Does the feedback run without being asked?'),
     ('decay', 'Is the written knowledge still true?'),
     ('work-units', 'What is a unit of work, and when is it done?'),
 ]
 MARKS = {'ok': '✓', 'partial': '~', 'missing': '✗', 'ask': '?', 'na': '–'}
-# Answers recorded with --record count for this many days; after that the question comes back (knowledge decays).
+# Days a recorded answer counts before the question comes back.
 ANSWER_DAYS = 180
 SECTIONS = {
     'summary': ('Project summary', 'Skrót projektu'),
     'environment': ('Stack and environment', 'Stos i środowisko'),
     'verification': ('Verification', 'Weryfikacja'),
     'protected': ('Protected', 'Nietykalne'),
+    'quality': ('Quality bar', 'Poprzeczka jakości'),
 }
+LINT_CONFIGS = ('eslint.config.*', '.eslintrc*', 'biome.json', 'biome.jsonc', 'ruff.toml', '.ruff.toml',
+                'analysis_options.yaml', 'gdlintrc', '.gdlintrc', '.golangci.yml', '.golangci.yaml', 'clippy.toml',
+                '.swiftlint.yml', 'detekt.yml', '.clang-tidy', '.shellcheckrc', '.luacheckrc', '.editorconfig')
+# Keep in step with SUPPRESSIONS in hooks/checks.ts (a subset: the common ones).
+SUPPRESSION_RE = re.compile(r'eslint-disable|@ts-ignore|@ts-expect-error|biome-ignore|#\s*noqa\b|#\s*type:\s*ignore|'
+                            r'pylint:\s*disable|//\s*ignore(_for_file)?:|@warning_ignore|gdlint\s*:\s*(ignore|disable)|'
+                            r'//\s*nolint|#!?\[allow\(|@SuppressWarnings|swiftlint:disable|NOLINT')
+CODE_SUFFIXES = ('.ts', '.tsx', '.js', '.jsx', '.py', '.gd', '.dart', '.go', '.rs', '.swift', '.kt', '.java', '.cs',
+                 '.c', '.cc', '.cpp', '.h', '.hpp', '.rb', '.php', '.lua', '.sh')
+FEATURE_DIRS = ('docs/features', 'docs/funkcje')
 RUN_FILES = ('Makefile', 'justfile', 'Taskfile.yml', 'package.json', 'pubspec.yaml', 'pyproject.toml', 'setup.py',
              'Cargo.toml', 'go.mod', 'project.godot', 'build.gradle', 'build.gradle.kts', 'pom.xml', 'CMakeLists.txt',
              'docker-compose.yml', 'compose.yaml', 'init.sh', 'Gemfile', 'mix.exs', '*.sln', '*.uproject')
@@ -507,7 +509,7 @@ def audit(project: Path) -> dict:
     entry = (project / entry_rel).read_text(errors='ignore') if entry_rel else ''
     pfile = project / '.claude' / 'org-rules' / PROJECT_FILE[lang]
     ptext = pfile.read_text(errors='ignore') if pfile.exists() else ''
-    # Without the standard the sections may live in the entry itself.
+    # Without the standard the sections may live in the entry.
     source_text = ptext + '\n' + entry
     rules_dir = project / '.claude' / 'rules'
     rule_text = ' '.join(p.read_text(errors='ignore') for p in rules_dir.rglob('*.md')) if rules_dir.is_dir() else ''
@@ -518,7 +520,6 @@ def audit(project: Path) -> dict:
     def put(key, status, evidence):
         out[key] = {'status': status, 'evidence': evidence}
 
-    # what
     # The description is the text between the title and the first import or section.
     head = re.split(r'^(?:@|## )', re.sub(r'\A---\n.*?\n---\n', '', entry, flags=re.S), maxsplit=1, flags=re.M)[0]
     lines = [l for l in head.splitlines() if l.strip() and not l.startswith(('#', '<!--')) and '{{' not in l]
@@ -529,7 +530,6 @@ def audit(project: Path) -> dict:
     else:
         put('what', 'missing', 'no entry file and no README.md')
 
-    # layout
     top = sorted({f.split('/')[0] for f in files if '/' in f and not f.startswith('.')})
     unmapped = [d for d in top if not re.search(r'(?<![\w.-])' + re.escape(d) + r'(?:/|`|\b)', known)]
     rows = len(re.findall(r'^\|\s*`', section(entry, ('Where things are', 'Gdzie co jest')) or '', re.M))
@@ -541,7 +541,6 @@ def audit(project: Path) -> dict:
     else:
         put('layout', 'ok', f'every top-level directory is mapped ({len(top)}; map rows {rows})')
 
-    # run
     env = filled(section(source_text, SECTIONS['environment']))
     run_files = exists_any(project, RUN_FILES)
     if env:
@@ -551,7 +550,6 @@ def audit(project: Path) -> dict:
     else:
         put('run', 'missing', 'no "Stack and environment" section and no recognised run files')
 
-    # verify
     body = section(source_text, SECTIONS['verification'])
     blocks = re.findall(r'```(?:bash|sh)?\n(.*?)```', body or '', re.S)
     commands = [l.strip() for b in blocks for l in b.splitlines() if l.strip() and not l.strip().startswith('#') and '{{' not in l]
@@ -574,7 +572,6 @@ def audit(project: Path) -> dict:
     else:
         put('verify', 'ok', f'{len(commands)} commands' + (f'; /tests: {tests}' if tests else '; no "tests" in .claude/kokpit.json'))
 
-    # now
     threads = [p for p in (project / '.claude' / 'handoffs').glob('*.md') if not p.name.endswith(('.archive.md', '.archiwum.md'))]
     register = [r for r in REGISTER.values() if (project / r).exists()]
     progress = exists_any(project, PROGRESS_FILES)
@@ -595,7 +592,6 @@ def audit(project: Path) -> dict:
     else:
         put('now', 'missing', evidence)
 
-    # entry: a router (overview, commands, hard constraints, pointers), not an encyclopedia
     loaded = [project / entry_rel] if entry_rel else []
     for m in re.finditer(r'^@([\w./\-]+\.md)\s*$', entry, re.M):
         target = (project / entry_rel).parent / m.group(1)
@@ -616,7 +612,6 @@ def audit(project: Path) -> dict:
     else:
         put('entry', 'ok', evidence)
 
-    # near-code
     counts: dict[str, int] = {}
     for f in files:
         if '/' in f and not f.startswith('.'):
@@ -633,7 +628,6 @@ def audit(project: Path) -> dict:
     else:
         put('near-code', 'ok', f'{len(large)} large directories, each with an area rule or a local doc ({len(globs)} rule globs)')
 
-    # rules: a reason for each, an end for temporary ones, no contradictions (the review needs the Owner)
     rule_files = [project / f for f in files if f.endswith('.md') and (f.startswith(('.claude/org-rules/1', '.claude/rules/')) or f == entry_rel)]
     expired = [f'{p.relative_to(project)} ({d})' for p in rule_files for d in UNTIL.findall(p.read_text(errors='ignore'))
                if d < time.strftime('%Y-%m-%d')]
@@ -644,10 +638,8 @@ def audit(project: Path) -> dict:
         put('rules', 'ask', f'{summary_rules} lasting rules, {area_rules} area rule files: review them with the Owner '
             '(why each exists, contradictions, ones whose removal would change no decision)')
 
-    # outside: only the Owner knows
     put('outside', 'ask', 'decisions in chats, tickets, wikis or people\'s heads: only the Owner can say')
 
-    # protected
     pbody = section(source_text, SECTIONS['protected'])
     m = re.search(r'```kokpit-(?:protected|nietykalne)\n(.*?)```', pbody or source_text, re.S)
     items = [l for l in (m.group(1).splitlines() if m else []) if l.strip() and not l.strip().startswith('#') and '{{' not in l]
@@ -663,7 +655,6 @@ def audit(project: Path) -> dict:
     else:
         put('protected', 'ask', 'empty protected list: is there really no local data, manual work, generator or paid tool?')
 
-    # pins
     pins = exists_any(project, PIN_FILES)
     mentions = re.findall(r'\b\d+\.\d+(?:\.\d+)?\b', '\n'.join(env))
     if pins and mentions:
@@ -673,12 +664,43 @@ def audit(project: Path) -> dict:
     else:
         put('pins', 'missing', 'no pin or lock files and no versions in the project file')
 
-    # feedback
+    try:
+        checks = json.loads((project / '.claude' / 'kokpit.json').read_text()).get('checks')
+    except (OSError, ValueError):
+        checks = None
+    lint_rules = len(checks.get('lint') or []) if isinstance(checks, dict) else 0
+    configs = exists_any(project, LINT_CONFIGS)
+    suppressions = 0
+    for f in files:
+        if f.endswith(CODE_SUFFIXES) and not f.startswith('tools/docs/') and (project / f).is_file():
+            suppressions += len(SUPPRESSION_RE.findall((project / f).read_text(errors='ignore')))
+    bar = filled(section(ptext or entry, SECTIONS['quality']))
+    evidence = (f'lint on edit: {lint_rules} rule(s)' + (' (checks off)' if checks is False else '') +
+                f'; linter config: {", ".join(configs[:4]) or "none"}; {suppressions} checker suppressions in tracked code'
+                f'; quality bar {"written" if bar else "missing"}')
+    if lint_rules and bar:
+        put('quality', 'ok', evidence)
+    elif lint_rules or bar or configs:
+        put('quality', 'partial', evidence)
+    else:
+        put('quality', 'missing', evidence)
+
+    fdir = next((d for d in FEATURE_DIRS if (project / d / 'README.md').exists()), None)
+    if not fdir:
+        put('proof', 'missing', 'no feature map (docs/features/README.md): nothing says how to drive the app and prove a feature')
+    else:
+        index = (project / fdir / 'README.md').read_text(errors='ignore')
+        driving = section(index, ('Driving the app', 'Sterowanie aplikacją')) or ''
+        pages = [p for p in (project / fdir).glob('*.md') if p.name != 'README.md']
+        mapped = sum(1 for p in pages if re.search(r'^paths:', p.read_text(errors='ignore'), re.M))
+        evidence = (f'{fdir}: driving {"unfilled" if "{{" in driving or not driving.strip() else "written"}; '
+                    f'{len(pages)} feature page(s), {mapped} with paths:')
+        put('proof', 'ok' if pages and driving.strip() and '{{' not in driving else 'partial', evidence)
+
     hook = has_hook(project)
     parts = [f'check_docs hook {"yes" if hook else "no"}', f'CI {", ".join(ci) if ci else "none"}']
     put('feedback', 'ok' if hook and ci else 'partial' if hook or ci else 'missing', '; '.join(parts))
 
-    # decay
     check = project / 'tools' / 'docs' / 'check_docs.py'
     if check.exists():
         r = subprocess.run([sys.executable, '-I', str(check)], cwd=project, capture_output=True, text=True)
@@ -689,7 +711,6 @@ def audit(project: Path) -> dict:
     else:
         put('decay', 'ask', 'no check_docs.py: dead links, paths and commands are not checked')
 
-    # work-units
     core = (project / '.claude' / 'org-rules' / ('00-core-agents.md' if lang == 'en' else '00-rdzen-praca-agentow.md')).exists()
     if core and commands:
         put('work-units', 'ok', 'core rules (commits, parallel agents, reports) plus the verification commands define "done"')

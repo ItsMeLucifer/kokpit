@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# core: 0.11.0 (Kokpit repo standard; updated by /kokpit:setup, do not edit by hand)
+# core: 0.12.0 (Kokpit repo standard; updated by /kokpit:setup, do not edit by hand)
 """Consistency of project knowledge and agent rules (standard library only, about 1 s).
 
     python3 tools/docs/check_docs.py                  # check everything, exit 1 on errors
@@ -130,8 +130,6 @@ def project_file():
     return None
 
 
-# --- protected items from the project file ----------------------------------------------------------
-
 def protected():
     rel = project_file()
     m = re.search(r"```kokpit-(?:protected|nietykalne)\n(.*?)```", read(rel) if rel else "", re.S)
@@ -192,7 +190,7 @@ def check_org():
             error(f"org-rules/{f}: core file without `core:` (version from Kokpit)")
 
 
-# --- 2–4. entry, budget, templates -------------------------------------------------------------------
+# 2–4. entry, budget, templates
 
 IMPORT = re.compile(r"(?:^|\s)@([~\w./\-]+\.md)\b")
 
@@ -265,7 +263,7 @@ def check_entry(c):
         warnings.append(f"{project}: no verification commands (section \"Verification\"); the agent cannot check its work")
 
 
-# --- 5–6. rules and directory hints ------------------------------------------------------------------
+# 5–6. rules and directory hints
 
 def glob_re(glob):
     i, out = 0, ""
@@ -397,7 +395,7 @@ def check_hints(files, write=False):
             error(f"directory hint out of date: {change} (python3 tools/docs/check_docs.py --hints)")
 
 
-# --- 7. links ----------------------------------------------------------------------------------------
+# 7. links
 
 LINK = re.compile(r"\[[^\]]*\]\(([^)\s]+)\)")
 TICK = re.compile(r"`([^`\n]+)`")
@@ -434,7 +432,7 @@ def check_links(files, c, local):
                     error(f"{rel}:{number}: path does not exist `{token}`")
 
 
-# --- 8. agent memory ---------------------------------------------------------------------------------
+# 8. agent memory
 
 GRANTS = re.compile(r"without asking|without (?:the user's )?consent|--no-verify|always allowed|do not ask|"
                     r"bez pytania|bez zgody|zawsze wolno|nie pytaj o", re.I)
@@ -468,7 +466,7 @@ def check_memory():
                             f"(memory grants no permissions): {line.strip()[:80]}")
 
 
-# --- 9. project checks -------------------------------------------------------------------------------
+# 9. project checks
 
 def check_project(files):
     path = next((p for p in PROJECT_CHECKS if os.path.exists(p)), None)
@@ -488,7 +486,7 @@ def check_project(files):
     warnings.extend(found_warnings)
 
 
-# --- 10. progress and expiring rules ----------------------------------------------------------------
+# 10. progress and expiring rules
 
 PROGRESS_FILES = ("docs/progress.md", "docs/postep.md")
 UNTIL = re.compile(r"\((?:until|do):\s*(\d{4}-\d{2}-\d{2})\)")
@@ -527,8 +525,6 @@ def check_expiry(files):
                 if date < today:
                     warnings.append(f"{rel}:{number}: the rule expired on {date}: remove it or give it a new date")
 
-
-# --- entry point -------------------------------------------------------------------------------------
 
 def concerns(event):
     tool_input = event.get("tool_input") or {}

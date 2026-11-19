@@ -14,20 +14,24 @@ FILL = {
     'en': {
         'file': '.claude/org-rules/10-project.md',
         'pairs': [('1. {{RULE}}', '1. A rule.'), ('{{ENVIRONMENT}}', 'Python 3.12 (.python-version).'),
-                  ('{{VERIFICATION}}', 'pytest'), ('{{INDEX}}', '')],
+                  ('{{VERIFICATION}}', 'pytest'), ('{{INDEX}}', ''),
+                  ('{{QUALITY}}', 'Product. Ruff on every edit.')],
         'protected': '{{PROTECTED}}',
         'items': 'data art_work/\nmanual docs/story.md\ngenerator tools/gen_ui.py\npaid mcp__Expensive',
         'manual': 'docs/story.md',
         'entry': [('{{MAP}}', ''), ('{{DESCRIPTION}}', 'A test.')],
+        'features': 'docs/features/README.md',
     },
     'pl': {
         'file': '.claude/org-rules/10-projekt.md',
         'pairs': [('1. {{ZASADA}}', '1. Zasada.'), ('{{SRODOWISKO}}', 'Python 3.12.'),
-                  ('{{WERYFIKACJA}}', 'pytest'), ('{{SPIS}}', '')],
+                  ('{{WERYFIKACJA}}', 'pytest'), ('{{SPIS}}', ''),
+                  ('{{JAKOSC}}', 'Produkt. Ruff po każdej edycji.')],
         'protected': '{{NIETYKALNE}}',
         'items': 'dane art_work/\nreczne docs/story.md\ngenerator tools/gen_ui.py\nplatne mcp__Expensive',
         'manual': 'docs/story.md',
         'entry': [('{{MAPA}}', ''), ('{{OPIS}}', 'Test.')],
+        'features': 'docs/funkcje/README.md',
     },
 }
 
@@ -81,6 +85,8 @@ class Standard(unittest.TestCase):
         for a, b in f['entry']:
             t = t.replace(a, b)
         c.write_text(t)
+        m = self.repo / f['features']
+        m.write_text(re.sub(r'\{\{[A-Z]+\}\}', 'python3 app.py', m.read_text()))
         (self.repo / 'docs/story.md').write_text('x\n')
 
     def check(self, *args, stdin=None):
@@ -257,6 +263,25 @@ class Standard(unittest.TestCase):
                 self.check('--write-manifest')
                 self.assertIn('expired on 2020-01-01', self.check().stdout)
                 self.assertEqual(self.audit()['rules'], 'partial')
+
+    def test_audit_quality_and_proof(self):
+        for lang in ('en', 'pl'):
+            with self.subTest(lang=lang):
+                self.new_repo()
+                (self.repo / 'src').mkdir(exist_ok=True)
+                (self.repo / 'src/a.py').write_text('x = 1  # noqa\n')
+                self.init(lang)
+                before = self.audit()
+                self.assertEqual((before['quality'], before['proof']), ('missing', 'partial'))
+                self.fill(lang)
+                kj = self.repo / '.claude/kokpit.json'
+                kj.write_text(json.dumps({'checks': {'lint': [{'files': ['**/*.py'], 'command': 'ruff check {file}'}]}}))
+                fdir = self.repo / FILL[lang]['features']
+                (fdir.parent / 'login.md').write_text('---\npaths: [src/**]\n---\n# Login\n')
+                after = self.audit()
+                self.assertEqual((after['quality'], after['proof']), ('ok', 'ok'))
+                out = run(sys.executable, *STANDARD[1:], 'audit', str(self.repo)).stdout
+                self.assertIn('1 checker suppressions', out)
 
     def test_core_templates_have_no_placeholders(self):
         standard = HERE.parent / 'standard'

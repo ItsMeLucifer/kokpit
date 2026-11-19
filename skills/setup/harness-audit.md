@@ -6,7 +6,7 @@ Evidence comes from `S audit` (`setup.sh standard audit <project>`). It reports 
 
 ## The questions
 
-Fourteen items. The first five are the fresh session test: a new session with only the repo must answer them without asking a person.
+Sixteen items. The first five are the fresh session test: a new session with only the repo must answer them without asking a person.
 
 | Item | Question | Covered when | The answer goes to |
 |---|---|---|---|
@@ -20,7 +20,9 @@ Fourteen items. The first five are the fresh session test: a new session with on
 | `rules` | Does every rule have a reason, and do none contradict? | each lasting and area rule says why it exists, temporary ones end with `(until: …)`, no two rules disagree, and none could go without changing a decision | the rule itself; removals and conflicts as register entries |
 | `outside` | What knowledge lives outside the repo? | the Owner has gone through chats, tickets, wiki pages and "things everyone knows", and what matters is written down | wherever its kind belongs (table below) |
 | `protected` | What must the agent not touch or pay for? | local data, manual work, generators and paid tools are listed | "Protected" in the project file, enforced by the lock script |
+| `proof` | Can an agent drive the app and prove a feature works? | `docs/features/README.md` says how to launch the app, check it is ready, drive it, capture evidence and clean up, with real commands that were run once; the main features have pages with `paths:` | the feature map (`docs/features/`), used by `/kokpit:verify` |
 | `pins` | Are tool and runtime versions pinned? | versions are in a pin or lock file, and the project file names them | the pin file itself; versions in "Stack and environment" |
+| `quality` | What guards the code against the mistakes agents make here? | the Owner named the recurring problems; a linter runs on every edit (`checks.lint`), recurring mistakes are linter rules or `checks.patterns`, and the project file says prototype or product | `checks` in `.claude/kokpit.json`, the linter's config file, "Quality bar" in the project file |
 | `feedback` | Does the feedback run without being asked? | `check_docs.py` runs as a hook, and the checks run in CI | the hook (`S hook`); a CI workflow (GitHub module) |
 | `decay` | Is the written knowledge still true? | `check_docs.py` reports nothing, and the Owner confirms that nothing written contradicts how things work now | fixes in place; outdated pages to the archive |
 | `work-units` | What is a unit of work, and when is it done? | it is clear what one change includes, which state counts as green, and how parallel agents stay apart | lasting rules in the project summary; the core already covers commits, branches and agents |
@@ -38,6 +40,8 @@ The last items come from treating agent state like a database transaction: a cha
    - `outside`: "Which decisions about this project live outside the repo: in chats, tickets, a wiki, someone's head? Which of them would change how an agent writes code here?" Ask for each one what it is and why, not the whole history.
    - `decay`: "Is anything written here no longer true?" Name the pages and rules most likely to be stale (the oldest, those about code that changed most).
    - `now`: "Which areas are in progress, blocked, or recently done?" Seed the progress file with one line per area, linked to its thread or page. Status notes kept elsewhere (a local file, a dedicated skill, a chat) become the detail page a line links to.
+   - `quality`: work from the problem to the tool, not the other way round. Ask: "What goes wrong when agents work here: which mistakes come back, what do you fix after them?" Then the stack and architecture as they are (layers, modules, boundaries an agent must not cross), and what the Owner already uses. Propose a linter from `linters.md` (next to this file) that fits the stack and is not there yet, with its single-file command for `checks.lint`; for each named mistake, the cheapest check that catches it, in that file's order (an existing linter rule, a `checks.patterns` expression, a custom rule, a sentence last). Ask whether the project or an area is a prototype or a product. Install nothing and add no dependency without consent; write the linter's config file, the `checks` section, the "Quality bar" section, and a lint command in "Verification". Architecture boundaries become area rules with `paths:`, and a boundary a linter can check (forbidden imports between layers) becomes a lint rule too.
+   - `proof`: answer from the codebase first and ask only what you cannot observe. What does a user touch (a UI, a CLI, an API, a game window, a library's callers)? How does the app start locally, and how can an agent drive it: existing end-to-end tests, Playwright, a headless mode, a debug port, a script that loads a scene and prints state, plain HTTP? What evidence can be captured (screenshots, transcripts, read-back data)? Fill "Driving the app" with the exact commands, then run launch, the ready check and one drive once yourself: an instruction that never ran is a draft. Seed pages for the 3–5 main features (what the user gets, how they reach it, the steps, what end state proves it works, `paths:`). When the app cannot be driven yet, say so in "Driving the app" and record what is missing as a register entry; do not write pages that only describe.
    - `rules`: go through the lasting rules and the area rules with the Owner: why each exists (write the reason next to it), whether it is temporary (add `(until: …)`), which pairs contradict, and which could go without changing any decision. Every rule added while instructions bloat makes the important ones harder to see; a removal is as good a result as an addition.
    - `work-units`: "What does one change include (code, tests, docs)? Which command must be green before it counts as done? Do several agents ever work here at once?"
    An item is closed when its answer is written down (step 4) or the Owner says it does not apply; record that: `S audit --record <item> n/a "<reason>"`. For `outside`, `decay` and `work-units`, which the script cannot confirm, record the answer: `S audit --record <item> answered "<one line>"` (it counts for 180 days, then the question comes back). The Owner may stop at any time: then list what is still open and stop asking.
@@ -49,6 +53,8 @@ The last items come from treating agent state like a database transaction: a cha
    | a constraint of one area or module | `.claude/rules/<area>.md` with `paths:` |
    | how to run, versions | "Stack and environment" |
    | how to verify | "Verification" and `.claude/kokpit.json` |
+   | a recurring mistake, a forbidden construct | a linter rule, or a regular expression in `checks.patterns`; a sentence only when no check can catch it |
+   | prototype or product, the linter, the recurring mistakes | "Quality bar" in the project file |
    | something not to touch or pay for | "Protected" |
    | where something is | the map in `.claude/CLAUDE.md` |
    | how something works and why | a wiki page in `docs/` and its line in `docs/README.md` |

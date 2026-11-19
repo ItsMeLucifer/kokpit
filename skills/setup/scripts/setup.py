@@ -26,7 +26,7 @@ UNSUPPORTED_CODE = {
 }
 AUXILIARY = {'json', 'sh', 'bash', 'md', 'txt', 'yaml', 'yml', 'html'}
 GRAPH_THRESHOLD = 0.6
-# Estimate: about 3 UTF-8 bytes per token (a conservative figure that also covers text with diacritics).
+# About 3 UTF-8 bytes per token (conservative; covers diacritics).
 BYTES_PER_TOKEN = 3
 ENTRY_LINE_LIMIT = 200  # the Claude Code documentation's recommendation for memory files
 LARGE_THREAD = 20_000
@@ -126,9 +126,8 @@ def imports(path: Path, depth: int = 0, seen=None) -> list:
 def sizes(project_path: str) -> int:
     project = Path(project_path)
     root = project.resolve()
-    # Claude Code loads these in full at the start of every session (and every subagent except Explore/Plan).
-    # On macOS .claude/CLAUDE.md and .claude/CLAUDE.MD are the same file, and AGENTS.md is often a link: count once.
-    # The key is the inode: on macOS resolve() does not normalize case (CLAUDE.md vs CLAUDE.MD).
+    # Claude Code loads these in full at every session start (and in every subagent except Explore/Plan).
+    # macOS: CLAUDE.md and CLAUDE.MD are one file and resolve() does not normalize case, and AGENTS.md is often a link; count by inode.
     seen: dict[tuple[int, int], str] = {}
 
     def inode(p: Path) -> tuple[int, int]:
@@ -154,7 +153,7 @@ def sizes(project_path: str) -> int:
             print(f'  ✓ AGENTS.md: the same file as {seen[inode(agents)]} (for other agents; Claude Code counts it once)')
         else:
             print(f'  ✓ AGENTS.md: {agents.stat().st_size // 1024} KB (Claude Code reads it only when there is no CLAUDE.md)')
-    # Archive files are read by /resume only when something is missing: they do not count towards the cost.
+    # Archive files are not counted: /resume reads them only when something is missing.
     threads = sorted(
         (p for p in (project / '.claude/handoffs').glob('*.md') if not p.name.endswith(ARCHIVE_SUFFIXES)),
         key=lambda p: -p.stat().st_size,

@@ -40,8 +40,6 @@ const ON = { split: true, effort: true, floor: 'medium' }
 const COMPOSE = { sections: [], model: OPUS, promptModel: OPUS, outputStyle: null, tools: [], traits: [], surfaces: ['terminal'] } as never
 const PANE_PROPS = { title: 'Kokpit', isFocused: true, bodyColumns: 120, placement: 'inline', scroll: { offset: 0, bodyRows: 60, contentRows: 60 }, view: 'main' } as never
 
-// ── Pure rules ──
-
 test('level: ceiling without a rating, then from the rating; a failure raises it, never above the ceiling or below the floor', () => {
   expect(levelFor(null, 0, 'medium', 'xhigh')).toBe('xhigh')
   expect(levelFor('simple', 0, 'medium', 'xhigh')).toBe('medium')
@@ -107,8 +105,6 @@ test('stats add up, and stats from before 0.10 are read', () => {
   expect(legacy).toMatchObject({ since: '2026-10-01', steps: { high: { n: 4, out: 40 } }, lowered: 2, ratings: { simple: 3, hard: 1 }, subBaseline: 5 })
 })
 
-// ── In a session ──
-
 /** An engine under the plugin: store, session start, model requests that record the effort sent. */
 function engine(
   on: On,
@@ -150,7 +146,7 @@ function engine(
 async function step($: { turn: { step: (e: never) => AsyncGenerator<unknown, unknown> & { result: Promise<unknown> } } }, model = OPUS, effort = 'xhigh') {
   const s = $.turn.step({ turnId: 't1', index: 0, model, effort, messageCount: 3 } as never)
   for await (const _ of s) {
-    // no chunks in the test stream
+    // no chunks
   }
   return s.result
 }
@@ -335,8 +331,6 @@ for (const surface of SURFACES) {
   })
 }
 
-// ── Savings estimate ──
-
 test('request pricing and saved output', () => {
   const u = { input_tokens: 1000, output_tokens: 1000, cache_read_input_tokens: 100_000, cache_creation_input_tokens: 2000 }
   // Opus 5.5: 1000×4 + 1000×20 + 100k×0.2 + 2000×8 (main conversation: one-hour write) = 60,000 / 1e6
@@ -420,17 +414,20 @@ test('in a session: steps with usage count savings, weekly readings calibrate, t
   const pane = await $.ui.mount({ plugin: 'kokpit', surface: 'terminal', component: 'Pane', props: PANE_PROPS, requestId: 'kokpit-panel' })
   await pane.press({ key: 'tab-stats' })
   const drawn = JSON.stringify(await pane.drawn())
-  expect(drawn).toContain('Savings on Max x20')
-  expect(drawn).toContain('of the weekly limit')
-  expect(drawn).toContain('fewer output tokens')
+  expect(drawn).toContain('saved on Max x20')
+  expect(drawn).toContain('2.5%–7.5%')
+  expect(drawn).toContain('10 of 10 steps lower')
+  expect(drawn).not.toContain('How this is computed')
+  await pane.press({ key: 'kokpit-help' })
+  expect(JSON.stringify(await pane.drawn())).toContain('Calibration')
   await pane.press({ key: 'eco-plan-pro' })
   expect(mem['economy-plan']).toBe('pro')
   // a separate calibration for Pro: none yet
-  expect(JSON.stringify(await pane.drawn())).toContain('after calibration')
+  expect(JSON.stringify(await pane.drawn())).toContain('calibrating')
   await pane.press({ key: 'tab-handoff' })
   const h = JSON.stringify(await pane.drawn())
   expect(h).toContain('Thresholds')
-  expect(h).toContain('Decision register')
+  expect(h).toContain('Decisions')
 })
 
 test('subagents above the conversation\'s model (Fable under Opus) are kept apart from the savings; the pane names the version', async ($, on) => {
@@ -508,8 +505,6 @@ test('worktree: settings and stats shared by the project (the root above the com
   expect(sent.map(x => x.effort)).toEqual(['medium'])
   expect(mem['economy-stats:/repo']).toBeDefined()
 })
-
-// ── Local model ──
 
 test('model list from ollama list, and the commands', () => {
   const out = 'NAME                    ID              SIZE     MODIFIED\nglm-4.7-flash:latest    4475827791a2    19 GB    4 days ago\nqwen3:8b    abc    5 GB    1 week ago\n'

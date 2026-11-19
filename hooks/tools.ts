@@ -4,7 +4,7 @@
 /** The `skillOverrides` value that hides a skill from the model but keeps /name working. */
 export const HIDDEN = 'user-invocable-only'
 
-/** Prefix of skills synced from the claude.ai account; settings look them up by full and bare name. */
+/** Prefix of skills synced from the claude.ai account; settings read them by full or bare name. */
 const SYNCED_PREFIX = 'anthropic-skills:'
 
 /** Share of code in the graph from `setup.py graph` output ("code in graph: 26% (threshold 60%)"). */

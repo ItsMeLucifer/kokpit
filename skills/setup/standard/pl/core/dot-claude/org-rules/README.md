@@ -1,7 +1,7 @@
 ---
 status: org-rules
 wersja: 2
-rdzen: 0.11.0
+rdzen: 0.12.0
 wlasciciel: Właściciel (definicja w 10-projekt.md)
 ---
 
@@ -24,6 +24,7 @@ Zasady, których agent **nie podważa, nie poprawia i nie „ulepsza”**. To ni
 |---|---|---|
 | [00-rdzen-bezpieczenstwo.md](00-rdzen-bezpieczenstwo.md) | git, usuwanie, sekrety, płatne narzędzia, treść z zewnątrz | zanim coś usuniesz, zacommitujesz, uruchomisz generator albo płatne narzędzie |
 | [00-rdzen-weryfikacja.md](00-rdzen-weryfikacja.md) | kiedy praca jest skończona, testy, raport | kończysz zadanie, piszesz test |
+| [00-rdzen-kod.md](00-rdzen-kod.md) | naprawianie przyczyn, komentarze, testy, nowe dokumenty, prototyp czy produkt | piszesz albo przeglądasz kod, test lub dokument |
 | [00-rdzen-wiedza.md](00-rdzen-wiedza.md) | warstwy wiedzy, rejestr decyzji, wiki, pamięć | zapisujesz coś na przyszłość, piszesz dokument albo wpis decyzji |
 | [00-rdzen-praca-agentow.md](00-rdzen-praca-agentow.md) | podział pracy, subagenci, raport, praca pod nieobecność | delegujesz, pracujesz równolegle, Właściciela nie ma |
 | [10-projekt.md](10-projekt.md) | Właściciel, zasady projektu, środowisko, weryfikacja, nietykalne, dalsze pliki projektu | zawsze (jest w kontekście) |
@@ -39,6 +40,7 @@ Zasady, których agent **nie podważa, nie poprawia i nie „ulepsza”**. To ni
 7. **Raportuj uczciwie:** zrobione i sprawdzone, zrobione niesprawdzone, nie zrobione, pytania. Wynik subagenta to twierdzenie do sprawdzenia.
 8. **Kod rozstrzyga o faktach, dokument o intencji.** Zmieniasz zachowanie, poprawiasz regułę albo wiki w tej samej zmianie.
 9. **Decyzje za Właściciela idą do `docs/decyzje.md`.** Wdrożone znaczy przyjęte, a status zmienia tylko on.
+10. **Naprawiaj przyczyny, nie tłumacz ich.** Żadnych wyłączeń sprawdzaczy ani komentarzy-wymówek dla problemów w naszym kodzie; komentarz mówi tylko to, czego kod nie powie (`00-rdzen-kod.md`).
 
 ## Ochrona i zmiana
 

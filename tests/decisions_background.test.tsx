@@ -94,8 +94,6 @@ const CONFIG = JSON.stringify({
   jobs: { bench: 'godot --headless --script res://bench/{1}.gd -- {rest}', coverage: 'npm run coverage' },
 })
 
-// ── Register: pure functions ──
-
 test('parsing entries', () => {
   const ds = parseDecisions(FILE)
   expect(ds.map(d => d.id)).toEqual(['D-001', 'D-002', 'D-003'])
@@ -145,8 +143,6 @@ test('the instruction to carry rulings into the documents', () => {
   expect(text).toContain('as applied')
 })
 
-// ── Background jobs: pure functions ──
-
 test('project config, command templates and job requests', () => {
   const config = parseProjectConfig(CONFIG)
   expect(fillCommand('npm test --', ['camp', 'a b'])).toBe("npm test -- camp 'a b'")
@@ -174,8 +170,6 @@ test('progress from test runner output', () => {
   expect(jobLine({ ...j, endedAt: 90_000, code: 1 }, 0)).toBe('✗ tests · 1:30 · 1/3 ✓ · 1 ✗ — test_forge')
   expect(clock(3_725_000)).toBe('1:02:05')
 })
-
-// ── Behaviour in a session ──
 
 for (const surface of SURFACES) {
   test(`${surface}: decisions pane, Accept writes to the file`, async ($, on) => {

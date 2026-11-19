@@ -9,6 +9,21 @@
       "name": "kokpit",
       "source": "./",
       "description": "A band above the prompt, handoffs to thread files, a decision register, background jobs, Economy (model and effort routing), workshop skills and a repo-standard setup."
+    },
+    {
+      "name": "security-audit",
+      "source": {
+        "source": "github",
+        "repo": "cloudflare/security-audit-skill",
+        "sha": "c1c8a8c1471069fb0e188eeaff69b8e8db6564a8"
+      },
+      "description": "Cloudflare's security audit skill (MIT), pinned to a reviewed commit: guidance, focused reviews, and a full multi-phase audit on request.",
+      "version": "2026.09.14",
+      "skills": [
+        "./skills/security-audit"
+      ],
+      "license": "MIT",
+      "homepage": "https://github.com/cloudflare/security-audit-skill"
     }
   ]
 }

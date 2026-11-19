@@ -8,6 +8,7 @@ Czytaj, gdy: szukasz, jak coś działa i dlaczego. Każda strona ma nagłówek (
 
 | Strona | O czym | Czytaj, gdy |
 |---|---|---|
+| [funkcje/README.md](funkcje/README.md) | mapa funkcji: jak sterować aplikacją i dowieść, że każda funkcja działa | kończysz zmianę (`/kokpit:verify`) albo chcesz wiedzieć, jak użytkownik dociera do funkcji |
 | [postep.md](postep.md) | gdzie jest praca: w toku, zablokowane, ostatnio zrobione | ktoś pyta o stan obszaru albo zaczynasz w nim pracę |
 | [decyzje.md](decyzje.md) | decyzje i pytania czekające na Właściciela | podejmujesz decyzję za Właściciela albo masz pytanie bez odpowiedzi w kodzie |
 | [archiwum/decyzje_rozstrzygniete.md](archiwum/decyzje_rozstrzygniete.md) | rozstrzygnięte decyzje, dosłownie | szukasz, dlaczego coś jest tak, a nie inaczej |
