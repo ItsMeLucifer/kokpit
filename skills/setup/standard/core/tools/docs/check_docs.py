@@ -531,7 +531,8 @@ def concerns(event):
     path = tool_input.get("file_path") or tool_input.get("notebook_path") or ""
     if not path:
         return False
-    rel = os.path.relpath(os.path.abspath(path), ROOT)
+    # Both sides resolved: a repo reached through a symlink (macOS /var -> /private/var) is still the same repo.
+    rel = os.path.relpath(os.path.realpath(path), os.path.realpath(ROOT))
     return rel.startswith((".claude/", "docs/")) or os.path.basename(rel) in ("CLAUDE.md", "AGENTS.md")
 
 
