@@ -1227,7 +1227,7 @@ test('with language pl new threads, the register and templates are Polish', { op
 
 // ── Clearing by itself, the critical threshold and paused agents ──
 
-import { CRITICAL_EXTRA, afterRestart, continuePrompt, flowOf, markerId, parseHandoffSettings, pausedNote, thresholds } from '../hooks/pause'
+import { CRITICAL_EXTRA, afterRestart, continuePrompt, flowOf, markerId, parseHandoffSettings, pausedNote, restartReminder, thresholds, withPausedNote } from '../hooks/pause'
 
 test('handoff settings: one level, unset by default, the old switch carries over, thresholds capped by the window', () => {
   expect(parseHandoffSettings(undefined)).toEqual({ level: null, soft: null, critical: null })
@@ -1262,6 +1262,13 @@ test('paused agents: the marker, the brief with a note to continue, the note for
   expect(note).toContain('- fork')
   expect(note).toContain('- npm test')
   expect(note).not.toContain('kokpit-resume:f1')
+  expect(note).toContain('Step 0, before anything else')
+  expect(note).not.toContain('if still needed')
+  // before the skill's steps, not after its rules
+  const skill = withPausedNote('# Resuming\n\nscript output\n\n## Steps\n\n1. Read\n\n## Rules\n', note)
+  expect(skill.indexOf('Step 0')).toBeLessThan(skill.indexOf('## Steps'))
+  expect(restartReminder(record)).toContain('prompt `kokpit-resume:a1`')
+  expect(restartReminder({ ...record, agents: [record.agents[1]!] })).toBeNull()
   // only the fork is left: nothing to restart any more
   expect(afterRestart(record, 'a1')).toBeNull()
 })
@@ -1358,8 +1365,18 @@ test('clear by itself: below the critical threshold a running agent is waited fo
   await $.classic.SessionStart({ source: 'clear' })
   await clock.settle()
   expect(ran[2]).toEqual({ command: 'kokpit:resume', args: 'thread' })
-  const resumed = await $.skill.prompt({ skill: 'kokpit:resume', text: 'CHOSEN THREAD: /p/.claude/handoffs/thread.md\n' })
+  const resumed = await $.skill.prompt({ skill: 'kokpit:resume', text: 'CHOSEN THREAD: /p/.claude/handoffs/thread.md\n\n## Steps\n\n1. Read\n' })
   expect(resumed.text).toContain('kokpit-resume:a1')
+  expect(resumed.text.indexOf('Step 0')).toBeLessThan(resumed.text.indexOf('## Steps'))
+
+  // the resume turn ends without restarting the agent: one reminder, and only one
+  await turn($, 't4', 'Kokpit · resumed thread: thread')
+  await clock.settle()
+  expect(io.submitted.filter(x => x.includes('still not running'))).toHaveLength(1)
+  expect(io.submitted.at(-1)).toContain('kokpit-resume:a1')
+  await turn($, 't5', 'Ok.')
+  await clock.settle()
+  expect(io.submitted.filter(x => x.includes('still not running'))).toHaveLength(1)
 
   // the model starts it with the marker: Kokpit puts the brief back, and the record is used up
   await $.agent.spawn({ tool_use_id: 'u2', prompt: 'kokpit-resume:a1', description: 'model ifryt', subagentType: 'general-purpose', parentModel: 'claude-opus-5-5', background: true, fork: false } as never)

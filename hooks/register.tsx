@@ -59,6 +59,8 @@ import {
   markerId,
   parseHandoffSettings,
   pausedNote,
+  restartReminder,
+  withPausedNote,
   thresholdFor,
   thresholds,
 } from './pause'
@@ -656,7 +658,9 @@ let currentTurnId = ''
 let pendingMode: LogMode = 'button'
 let pendingTokens = 0
 /** Commands and other background tasks from the last classic.Stop (the engine reports them only there). */
-let lastBackground: { id: string; type: string; description: string }[] = []
+let lastBackground: { id: string; type: string; description: string; command?: string }[] = []
+/** A resume that had paused agents to restart: checked once at the end of its turn. */
+let restartCheck: { file: string } | null = null
 let turnRunning = false
 let codeUnderTasks = false
 /** Checks that reported something in this session, for the Quality tab. */
@@ -1173,7 +1177,7 @@ async function pauseAndClear($: EngineInterface, path: string): Promise<void> {
     at: new Date(await $.clock.now()).toISOString(),
     thread,
     agents,
-    commands: commands.map(c => c.description || c.type),
+    commands: commands.map(c => (c.command ? `${c.description || c.type}: \`${c.command}\`` : c.description || c.type)),
   }
   if (agents.length || record.commands.length) {
     await attempt(async () => $.fs.write(await pausedFile($, thread), JSON.stringify(record, null, 2) + '\n'), undefined)
@@ -1821,8 +1825,11 @@ export const register: Register = (on, options) => {
     if (name === 'resume') {
       const r = await next(e)
       const chosen = /^CHOSEN THREAD: (.+)$/m.exec(r.text)?.[1]?.trim()
-      const record = chosen ? await readPaused($, await pausedFile($, threadName(chosen))) : null
-      return record ? { text: r.text + '\n' + pausedNote(record) } : r
+      const file = chosen ? await pausedFile($, threadName(chosen)) : null
+      const record = file ? await readPaused($, file) : null
+      if (!file || !record) return r
+      restartCheck = { file }
+      return { text: withPausedNote(r.text, pausedNote(record)) }
     }
     if (name === 'setup') {
       const r = await next(e)
@@ -2610,7 +2617,7 @@ export const register: Register = (on, options) => {
 
   // The engine reports commands and other background tasks only on Stop: remember them for /clear decisions.
   on('classic.Stop', async ($, e, next) => {
-    lastBackground = (e.background_tasks ?? []).map(t => ({ id: t.id, type: t.type, description: t.description }))
+    lastBackground = (e.background_tasks ?? []).map(t => ({ id: t.id, type: t.type, description: t.description, command: t.command }))
     return next(e)
   }).catch(($, e, next) => next(e))
 
@@ -2632,6 +2639,14 @@ export const register: Register = (on, options) => {
     if (e.agentId) return r
     turnRunning = false
     await flushEconomyStats($).catch(() => {})
+    if (restartCheck) {
+      // The resume turn ended: agents it should have restarted get one reminder (the marker spawn empties the record).
+      const file = restartCheck.file
+      restartCheck = null
+      const record = e.isAborted ? null : await readPaused($, file)
+      const reminder = record ? restartReminder(record) : null
+      if (reminder) $.clock.after(0, () => $.prompt.submit({ text: reminder }))
+    }
     const tasks = await read($, tasksAtom)
     if (codeUnderTasks && !e.isAborted && tasks.length && isFinished(tasks)) {
       codeUnderTasks = false

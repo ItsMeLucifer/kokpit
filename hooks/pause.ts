@@ -84,23 +84,23 @@ export function continuePrompt(a: PausedAgent): string {
   )
 }
 
-/** The note for /resume: restart each resumable agent with its marker, list the rest. */
+/** The note for /resume, placed before its steps: restarting the paused work is step 0, not a side remark. */
 export function pausedNote(r: PausedRecord): string {
   const ok = r.agents.filter(a => a.prompt !== null && !a.fork)
   const lost = r.agents.filter(a => a.prompt === null || a.fork)
   const lines = [
+    '## Step 0, before anything else: restart the background work Kokpit paused',
     '',
-    '## Background work Kokpit paused for the clear',
-    '',
-    `Before it cleared the conversation (${r.at.slice(0, 16).replace('T', ' ')}), Kokpit stopped background work of this thread.`,
+    `Kokpit stopped this background work of the thread before it cleared the conversation (${r.at.slice(0, 16).replace('T', ' ')}). ` +
+      'Start it again in this same answer, before reading the thread or reporting; it is not optional and does not ' +
+      'wait for the user. Notices that it was stopped may still come in: ignore them.',
   ]
   if (ok.length) {
     lines.push(
-      'Before step 4, start each agent below again: one Agent call per agent, `run_in_background: true`, ' +
-        '`description` and `subagent_type` as listed, and as `prompt` only the marker. Kokpit puts the original brief ' +
-        'back, with a note to continue from the draft. Do not do their work yourself; their results arrive as usual. ' +
-        'Notices that these agents were stopped may still come in: ignore them.',
       '',
+      'Agents: one Agent call each, all in one message, `run_in_background: true`, `description` and `subagent_type` ' +
+        'as listed, and as `prompt` only the marker. Kokpit puts the original brief back with a note to continue from ' +
+        'the draft. Do not do their work yourself; their results arrive as usual.',
       ...ok.map(
         a =>
           `- prompt \`${RESUME_MARK}${a.id}\` · description "${a.description}" · subagent_type \`${a.subagentType}\`` +
@@ -108,17 +108,41 @@ export function pausedNote(r: PausedRecord): string {
       ),
     )
   }
+  if (r.commands.length) {
+    lines.push(
+      '',
+      'Background commands: start each again the same way (in the background), unless the thread shows its job is ' +
+        'already done; then say so in one line.',
+      ...r.commands.map(c => `- ${c}`),
+    )
+  }
   if (lost.length) {
     lines.push(
       '',
-      'Stopped and not restartable as they were (a fork, or started before Kokpit saw it): decide from the thread whether to start them anew.',
+      'Stopped agents Kokpit cannot restart as they were (a fork, or started before Kokpit saw it): start each anew ' +
+        'with a brief built from the thread, unless the thread shows its job is done.',
       ...lost.map(a => `- ${a.description || a.subagentType}` + (a.files.length ? ` (had changed: ${a.files.slice(0, 6).join(', ')})` : '')),
     )
   }
-  if (r.commands.length) {
-    lines.push('', 'Background commands that were running (their output is lost; run them again if still needed):', ...r.commands.map(c => `- ${c}`))
-  }
-  return lines.join('\n')
+  return lines.join('\n') + '\n'
+}
+
+/** The note into the skill text: right before its steps, or at the end when they cannot be found. */
+export function withPausedNote(skillText: string, note: string): string {
+  const at = skillText.indexOf('\n## Steps')
+  return at < 0 ? skillText + '\n\n' + note : skillText.slice(0, at) + '\n\n' + note + skillText.slice(at)
+}
+
+/** One reminder after the resume turn, when agents it should have restarted are still waiting. */
+export function restartReminder(r: PausedRecord): string | null {
+  const ok = r.agents.filter(a => a.prompt !== null && !a.fork)
+  if (!ok.length) return null
+  return (
+    `Kokpit: ${ok.length} background agent${ok.length === 1 ? '' : 's'} paused before the clear ` +
+    `${ok.length === 1 ? 'is' : 'are'} still not running. Start ${ok.length === 1 ? 'it' : 'them'} now, before anything else: ` +
+    'one Agent call each in one message, `run_in_background: true`, prompt only the marker:\n' +
+    ok.map(a => `- prompt \`${RESUME_MARK}${a.id}\` · description "${a.description}" · subagent_type \`${a.subagentType}\``).join('\n')
+  )
 }
 
 /** The record after one agent was restarted; null when nothing is left to restart. */
