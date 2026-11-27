@@ -1892,7 +1892,7 @@ export const register: Register = (on, options) => {
           <Box key={`${key}-r${n}`} flexDirection="row">
             {r.cells.map((c, i) => (
               <Box key={`${key}-r${n}c${i}`} width={widths[i]}>
-                <Text color={i === 0 ? undefined : r.color} wrap="truncate-end">
+                <Text color={i === 0 ? undefined : r.color} wrap={i === r.cells.length - 1 ? 'wrap' : 'truncate-end'}>
                   {c}
                 </Text>
               </Box>
@@ -2040,13 +2040,15 @@ export const register: Register = (on, options) => {
           cells: [
             'Subagent routing',
             v.sub ? usd(v.sub.usd) : '—',
-            v.sub ? `${v.sub.pct >= 0 ? '−' : '+'}${Math.abs(Math.round(v.sub.pct))}% vs the conversation’s model` : 'no subagents yet',
+            v.sub
+              ? `${Math.abs(Math.round(v.sub.pct))}% ${v.sub.pct >= 0 ? 'cheaper' : 'dearer'} than on the conversation’s model`
+              : 'no subagents yet',
           ],
           color: v.sub ? sign(v.sub.usd) : undefined,
         },
       ]
       if (v.upgrade) {
-        sources.push({ cells: ['Your picks', '+' + usd(v.upgrade.usd), 'subagents above the conversation’s model, not counted'], color: 'yellow' })
+        sources.push({ cells: ['Your picks', '+' + usd(v.upgrade.usd), 'your pricier subagents (e.g. Fable); not counted'], color: 'yellow' })
       }
       return (
         <Box flexDirection="column">
