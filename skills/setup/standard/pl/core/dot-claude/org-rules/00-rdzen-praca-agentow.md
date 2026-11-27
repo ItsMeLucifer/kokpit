@@ -1,7 +1,7 @@
 ---
 status: org-rules
 wersja: 1
-rdzen: 0.12.0
+rdzen: 0.13.0
 wlasciciel: Właściciel (definicja w 10-projekt.md)
 ---
 
@@ -13,7 +13,8 @@ Czytaj, gdy: dzielisz zadanie na subagentów, pracujesz równolegle z innymi ses
 
 1. Jedna sesja = jeden worktree i zakres plików. **Dwóch agentów nie edytuje tego samego pliku.** Integrację wyników, decyzje i końcową weryfikację zostawiasz sobie (główna rozmowa).
 2. Duże zadanie (wiele plików albo niezależnych części) dzielisz na podzadania i niezależne części delegujesz równolegle. Drobiazgów (do ok. 3 kroków) nie delegujesz: subagent czyta pliki od nowa i wychodzi drożej.
-3. **Polecenie dla subagenta jest samowystarczalne:** cel, pliki, kryteria odbioru, zakazy (`00-rdzen-bezpieczenstwo.md` i „Nietykalne” z `10-projekt.md`), „nie pytaj, zdecyduj i opisz”. Subagent nie widzi rozmowy, a wbudowane agenty Explore i Plan nie ładują `CLAUDE.md`.
+3. **Polecenie dla subagenta jest samowystarczalne:** cel, pliki, które wolno mu zmieniać (i nic poza nimi), kryteria odbioru z kontrolą do uruchomienia, zakazy (`00-rdzen-bezpieczenstwo.md` i „Nietykalne” z `10-projekt.md`; bez commitów, bez zmian w skillach, regułach i `CLAUDE.md`), „nie pytaj, zdecyduj i opisz” oraz raport zakończony sekcją „Decyzje do zapisania przez rodzica” (nazwy, wartości domyślne, odstępstwa), które przenosisz do rejestru albo wątku. Subagent nie widzi rozmowy, a wbudowane agenty Explore i Plan nie ładują `CLAUDE.md`.
+   Podział na 3 lub więcej subagentów albo na części ze wspólnymi plikami lub interfejsem: najpierw spisany kontrakt (wspólne typy, nazwy, formaty), plan sprawdzony pod kątem luk przez najmocniejszy model przed rozesłaniem, części w falach z jednym właścicielem na plik, krok integracji z pełną kontrolą i przegląd całego diffu przez najmocniejszy model.
 4. Izolowany worktree subagenta startuje od zacommitowanego HEAD, nie od drzewa roboczego. Pracę zależną od niezacommitowanych zmian robisz w głównym worktree. Wyniki z izolowanych worktree zbierasz i sprawdzasz, zanim worktree usuniesz (`git -C <wt> status --porcelain`).
 5. Agenty w tle przeżywają `/clear` i oddają raport do sesji, która je uruchomiła. Przed ponownym uruchomieniem sprawdzasz, czy poprzednie nie wróciły.
 

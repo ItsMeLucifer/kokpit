@@ -33,17 +33,17 @@ Context fill, the 5-hour and weekly limits (with reset times) and progress of th
 
 ### Handoff instead of `/compact`
 
-**When.** Two token thresholds. The **soft** one (150k by default, never later than 75% of the window) starts a handoff by itself, but only after a finished task. The **hard** one (soft + 100k by default, never beyond 85%) starts it at the end of the next turn even mid-work. Modes:
+**When.** Two token thresholds, chosen in `/kokpit` → Handoff & tools (for all projects) or in the plugin settings. The **clear threshold** (150k by default, never later than 75% of the window) starts a handoff by itself, but only after a finished task. The **critical threshold** (clear + 100k by default, never beyond 85%) starts it at the end of the next turn even mid-work. Modes:
 
 | Mode | After the threshold |
 | --- | --- |
-| `break` (default) | a handoff starts at the end of a turn when the task is finished: the whole list checked off and the turn does not end with a question; from the hard threshold, at the end of the next turn |
+| `break` (default) | a handoff starts at the end of a turn when the task is finished: the whole list checked off and the turn does not end with a question; from the critical threshold, at the end of the next turn |
 | `button` | only a **Handoff** button in the band |
 | `auto` | a handoff starts at the end of the first turn after the threshold that does not end with a question |
 
 At most one automatic handoff per conversation, so background work that fills the context does not trigger more. **Now** and **Later** (snoozes by 30k tokens) are always available.
 
-**Where.** One file per **thread of work**, not per chat: `.claude/handoffs/<thread>.md`, carried across all the sessions of a topic. The frontmatter's `sessions:` lists the chats that wrote to it.
+**Where.** One file per **thread of work**, not per chat: `.claude/handoffs/<thread>.md`, carried across all the sessions of a topic. The frontmatter's `sessions:` lists the chats that wrote to it. Threads have one home, the main checkout, also for sessions in a worktree: a gitignored folder copied into a new worktree would otherwise fork every thread. A thread left in a worktree copy by an older Kokpit moves home when it is resumed by name; a worktree copy newer than the home thread is reported for merging.
 
 **Why nothing gets lost.**
 - **Decisions**, **Tried and dropped** and **User notes and pitfalls** only grow: old points stay word for word, outdated ones move to the archive with a note on what superseded them.
@@ -51,7 +51,9 @@ At most one automatic handoff per conversation, so background work that fills th
 - Before saving, a script copies the previous version, and a validator compares them: a protected point that disappeared without a trace is an error to fix. Above 20 KB the validator suggests slimming.
 - Only the current sections are rewritten: Goal, Current state, Evidence and numbers, Open questions, Next steps, Quick start.
 
-**What happens next, without clicking.** After the save nothing is cleared: you can read the last answers. When you write something, Kokpit holds the message, runs `/clear`, starts `/resume` for the thread in the new session and sends your message there, together with the last two answers as hidden context, so "yes" or "do point 2" still lands. Commands, messages with images and messages while background work runs pass through normally. If the conversation moved on after the save, Kokpit first refreshes the thread and only then clears. In plan mode the handoff waits until plan mode ends. While agents, Kokpit jobs or background commands of the session still run, clearing waits for their results.
+**What happens next, without clicking.** After the save nothing is cleared: you can read the last answers. When you write something, Kokpit holds the message, runs `/clear`, starts `/resume` for the thread in the new session and sends your message there, together with the last two answers as hidden context, so "yes" or "do point 2" still lands. Commands, messages with images and messages while background work runs pass through normally. If the conversation moved on after the save, Kokpit first refreshes the thread and only then clears. In plan mode the handoff waits until plan mode ends. While agents, Kokpit jobs or background commands of the session still run, clearing waits for their results (your message goes to this conversation), then refreshes the thread with them and clears.
+
+**Clearing by itself.** With **Clear by itself** on in `/kokpit` → Handoff & tools, nothing waits for a message: once the thread is saved and nothing runs in the background, Kokpit clears and resumes. After a finished piece of work the new session only reports and waits for you; after a handoff cut mid-work it carries on. Past the **critical threshold** Kokpit stops waiting for background agents: it stops them, keeps each agent's brief and the files it changed in `.claude/kokpit/paused/<thread>.json`, clears, resumes, and the new session starts them again in the background with the original brief and a note to continue from their draft (Kokpit swaps a short marker for the brief, so this costs no tokens). Background commands that were stopped are listed for a re-run. The band also offers **Pause them and clear** while it waits.
 
 **Lessons.** A handoff also looks for a procedure the user keeps asking for from scratch, a skill they corrected, or a mistake they had to point out twice, and adds at most three proposals to the decision register: a new skill, a change to a named skill, or a check (a linter rule or a `checks` pattern), in that order of preference: a check before a skill, a skill before a sentence. You accept or reject them in `/decisions`; nothing is written during the handoff.
 
@@ -91,6 +93,8 @@ Progress shows in the band (`⧗ tests camp · 1:23 · 14/52 ✓ · 1 ✗`, with
 Per-project settings (shared by all worktrees of the repo) in `/kokpit` → Economy. They take effect in a new conversation or after `/clear`, because changing the system prompt mid-conversation would re-read the whole conversation.
 
 - **Split across subagents.** For a large task Claude splits the work and sets `model` and `effort` for every subagent from a rubric: Opus for design and unknown bugs, Sonnet for precisely described work (on a Sonnet conversation subagents stay on Sonnet and Opus is only an advisor for a single hard question, because an Opus subagent costs twice the conversation's model), Haiku only in three narrow roles whose output is cheap to verify: **Explore**, **kokpit:reporter** (runs commands and reports output verbatim) and **kokpit:mechanic** (a pattern-driven change with a check, which stops instead of guessing). Both Kokpit agents end with `DONE` or `ABORTED: reason`. A Haiku request outside these roles becomes Sonnet; a failed tool call raises a subagent's effort one level.
+- **Briefs and large splits.** Every brief names the files the subagent may change, forbids commits and edits to skills, rules and `CLAUDE.md`, and asks for a closing "Decisions for the parent to record" section. Before a split into 3 or more subagents, or into parts that share files or an interface, Claude reads [`docs/large-split.md`](docs/large-split.md): contract first, a gap check of the plan by the strongest model, waves with one owner per file, an integration step, a final review by the strongest model. Based on ideas from Nous Research's [advanced-delegation](https://github.com/NousResearch/hermes-official-plugins/tree/main/advanced-delegation) plugin for Hermes.
+- **Delegation log.** After checking a subagent's work Claude records it with the `subagent_result` tool: the class of task, the model, and whether it passed first try, needed a fix or failed, with the cause. Only a failure on capability moves that class to a stronger model; a weak brief, missing context or a broken environment is fixed without one. After 3 first-try passes in a row Kokpit suggests one tier cheaper (never Haiku). The lessons go into the rubric at the start of the next conversation (not mid-conversation, to keep the prompt cache), and the classes show in `/kokpit` → Stats.
 - **Dynamic effort.** For every new request Claude rates the difficulty with the `effort_rating` tool, in parallel with its first tool call: simple → the floor (medium by default), medium → high, hard → the ceiling (xhigh by default, which may be above the session setting). A failed tool call raises it one level; plan mode stays at the ceiling. Only on models where an effort change keeps the prompt cache (Opus/Sonnet/Haiku 5.5, Fable 5.1).
 - **Local model.** Optional: a model from `ollama list` gets a `local_model` tool for summaries, drafts and pattern-driven code changes (through opencode in a separate worktree, returned as a diff to review).
 - **Stats.** Pick your plan (**Pro · Max x5 · Max x20**) and see the savings as a share of the weekly limit (a range), in API dollars, for dynamic effort and subagents separately. Tokens are measured for every request; two things are estimates: how much more thinking a step at the highest level would have produced (ranges, from raw tokens kept so the ranges can change), and the no-Economy scenario for subagents. The weekly share comes from a per-plan calibration: the measured cost of all requests against the rise of the weekly counter.
@@ -172,14 +176,14 @@ Check in a session: `/plugin` shows `1 mod active · kokpit`. In each repo add `
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `handoffMode` | `break` | `break`, `button` or `auto` (see Handoff) |
-| `handoffTokens` | 150000 | the soft threshold in context tokens (never later than 75% of the window) |
-| `handoffHardTokens` | 0 | the hard threshold; 0 = soft + 100,000 (never beyond 85%) |
-| `handoffClear` | `message` | `message`: your next message after a save clears and resumes; `button`: only "Clear and resume" |
+| `handoffTokens` | 150000 | the clear threshold in context tokens (never later than 75% of the window); `/kokpit` overrides it |
+| `handoffHardTokens` | 0 | the critical threshold; 0 = clear + 100,000 (never beyond 85%); `/kokpit` overrides it |
+| `handoffClear` | `message` | `message`: your next message after a save clears and resumes; `button`: only "Clear and resume"; **Clear by itself** in `/kokpit` makes it automatic |
 | `taskNudge` | true | ask Claude to keep a task list so the band can show progress |
 | `decisionsFile` | empty | the decision register; empty = `docs/decisions.md` (or an existing `docs/decyzje.md`) |
 | `language` | `en` | language of new handoff threads, register entries and repo-standard templates (`en` or `pl`); existing files keep theirs, the interface is English |
 
-Per project: Economy in `/kokpit`, background jobs in `.claude/kokpit.json`.
+Per project: Economy and Quality in `/kokpit`, background jobs and checks in `.claude/kokpit.json`. For all projects: clearing and both thresholds in `/kokpit` → Handoff & tools.
 
 ## Commands
 
@@ -197,7 +201,7 @@ Per project: Economy in `/kokpit`, background jobs in `.claude/kokpit.json`.
 | `/setup-linter [stack or mistakes]` | only a linter: from the recurring mistakes to a config, a baseline and, if you want, a run after every edit |
 | `/setup-testing [what to test]` | only manual testing by an agent: a proven recipe to launch, drive and observe the app ("Driving the app" in the feature map) |
 
-Writing and editing `.claude/handoffs/*.md` is approved automatically (only `.md` files directly in that directory of the project).
+Writing and editing `.claude/handoffs/*.md` is approved automatically (only `.md` files directly in that directory of the main checkout or of the session's worktree).
 
 ## Development
 

@@ -1,7 +1,7 @@
 ---
 status: org-rules
 version: 1
-core: 0.12.0
+core: 0.13.0
 owner: Owner (defined in 10-project.md)
 ---
 
@@ -13,7 +13,8 @@ Read when: you split a task across subagents, work in parallel with other sessio
 
 1. One session = one worktree and one set of files. **Two agents never edit the same file.** Integrating results, decisions and the final verification stay with you (the main conversation).
 2. A large task (many files or independent parts) is split into subtasks and the independent parts are delegated in parallel. Trivia (up to about 3 steps) is not delegated: a subagent reads the files again from scratch and costs more.
-3. **A subagent's brief is self-contained:** goal, files, acceptance criteria, prohibitions (`00-core-security.md` and "Protected" in `10-project.md`), "do not ask, decide and explain". A subagent does not see the conversation, and the built-in Explore and Plan agents do not load `CLAUDE.md`.
+3. **A subagent's brief is self-contained:** goal, the files it may change (and nothing else), acceptance criteria with the check to run, prohibitions (`00-core-security.md` and "Protected" in `10-project.md`; no commits, no edits to skills, rules or `CLAUDE.md`), "do not ask, decide and explain", and a report that ends with "Decisions for the parent to record" (names, defaults, deviations), which you carry into the register or the thread. A subagent does not see the conversation, and the built-in Explore and Plan agents do not load `CLAUDE.md`.
+   A split into 3 or more subagents, or into parts that share files or an interface: the contract (shared types, names, formats) is written down first, the plan is checked for gaps by the strongest model before dispatch, the parts run in waves with one owner per file, an integration step runs the whole check, and the strongest model reviews the full diff.
 4. A subagent's isolated worktree starts from the committed HEAD, not from the working tree. Work that depends on uncommitted changes happens in the main worktree. Collect and check results from isolated worktrees before removing them (`git -C <wt> status --porcelain`).
 5. Background agents survive `/clear` and report to the session that started them. Before starting them again, check whether the previous ones have come back.
 

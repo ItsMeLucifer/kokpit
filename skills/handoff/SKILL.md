@@ -24,8 +24,8 @@ Focus of the next session (may be empty): $ARGUMENTS
 ## Steps
 
 1. **Pick the thread.**
-   - The script printed "THREAD OF THIS SESSION: <file>" → write to that file.
-   - "none" → if this session continues one of the listed threads, use it; otherwise start a new one: `.claude/handoffs/<short-ascii-slug>.md` (e.g. `terrain-mud`, `ui-cards`). Either way add `${CLAUDE_SESSION_ID}` to `sessions:` in the frontmatter.
+   - The script printed "THREAD OF THIS SESSION: <file>" → write to that file. "COPY IN A WORKTREE" → carry over into it what only the old copy has, and tell the user the copy can go.
+   - "none" → if this session continues one of the listed threads, use it; otherwise start a new one in the THREADS DIR the script printed (the main checkout's `.claude/handoffs/`, also from a worktree): `<THREADS DIR>/<short-ascii-slug>.md` (e.g. `terrain-mud`, `ui-cards`). Either way add `${CLAUDE_SESSION_ID}` to `sessions:` in the frontmatter.
    - The session covered two independent topics → two threads, each with its own part.
 2. **Go through the whole conversation** with the checklist below before writing anything. Do not write from memory of the last few messages.
 3. **Update the file** following the template:

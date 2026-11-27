@@ -89,10 +89,10 @@ const flow = (name: string) => `${name}:${OWNER}`
 const NOW = Date.parse('2026-10-13T10:00:00Z')
 
 /** What the engine does under the plugins in a session: measure, commands, tools, clock, store. */
-function engine(on: On, ran: Ran, mem: Record<string, unknown> = {}, cwd = '/p') {
+function engine(on: On, ran: Ran, mem: Record<string, unknown> = {}, cwd = '/p', root = '/p') {
   on('session.measure', async (_$, e) => ({ changed: e.changed }))
   on('session.cwd', () => ({ value: cwd }))
-  on('session.root', () => ({ value: '/p' }))
+  on('session.root', () => ({ value: root }))
   on('session.id', () => ({ value: OWNER }))
   on('command.run', async (_$, e) => {
     ran.push({ command: e.command, args: e.args })
@@ -1223,4 +1223,165 @@ test('with language pl new threads, the register and templates are Polish', { op
   expect(handoff.text).toContain('"## Próbowaliśmy i odpadło"')
   const setup = await $.skill.prompt({ skill: 'kokpit:setup', text: 'SETUP' })
   expect(setup.text).toContain('--lang pl')
+})
+
+// ── Clearing by itself, the critical threshold and paused agents ──
+
+import { CRITICAL_EXTRA, afterRestart, continuePrompt, markerId, parseHandoffSettings, pausedNote, thresholds } from '../hooks/pause'
+
+test('handoff settings: off and unset by default, the panel overrides the plugin setting, both capped by the window', () => {
+  expect(parseHandoffSettings(undefined)).toEqual({ autoClear: false, soft: null, critical: null })
+  expect(parseHandoffSettings({ autoClear: true, soft: 300_000, critical: -1 })).toEqual({ autoClear: true, soft: 300_000, critical: null })
+  const config = { soft: 150_000, hard: 0 }
+  expect(thresholds({ autoClear: true, soft: 300_000, critical: 500_000 }, config, 1_000_000)).toEqual({ soft: 300_000, critical: 500_000 })
+  expect(thresholds({ autoClear: true, soft: null, critical: null }, config, 1_000_000)).toEqual({ soft: 150_000, critical: 150_000 + CRITICAL_EXTRA })
+  // a 200k window: 75% and 85% of it
+  expect(thresholds({ autoClear: true, soft: 300_000, critical: 500_000 }, config, 200_000)).toEqual({ soft: 150_000, critical: 170_000 })
+})
+
+test('paused agents: the marker, the brief with a note to continue, the note for /resume', () => {
+  expect(markerId('kokpit-resume:a1')).toBe('a1')
+  expect(markerId('  kokpit-resume: a1 ')).toBe('a1')
+  expect(markerId('Fix kokpit-resume:a1 please')).toBeNull()
+  const agent = { id: 'a1', description: 'model ifryt', subagentType: 'general-purpose', model: 'claude-sonnet-5-5', prompt: 'Build the ifryt model.', files: ['/p/art/ifryt.blend'], fork: false }
+  const brief = continuePrompt(agent)
+  expect(brief.startsWith('Build the ifryt model.')).toBe(true)
+  expect(brief).toContain('do not start over')
+  expect(brief).toContain('/p/art/ifryt.blend')
+  const record = { at: '2026-11-27T10:00:00Z', thread: 't', agents: [agent, { ...agent, id: 'f1', description: 'fork', fork: true, prompt: null }], commands: ['npm test'] }
+  const note = pausedNote(record)
+  expect(note).toContain('prompt `kokpit-resume:a1`')
+  expect(note).toContain('subagent_type `general-purpose`')
+  expect(note).toContain('- fork')
+  expect(note).toContain('- npm test')
+  expect(note).not.toContain('kokpit-resume:f1')
+  // only the fork is left: nothing to restart any more
+  expect(afterRestart(record, 'a1')).toBeNull()
+})
+
+test('clear by itself: after a handoff of finished work the conversation clears, and the resume only reports', async ($, on) => {
+  const ran: Ran = []
+  const mem: Record<string, unknown> = { 'handoff-settings': { autoClear: true, soft: null, critical: null } }
+  const clock = engine(on, ran, mem)
+  const files: Record<string, number> = {}
+  threads(on, files)
+  desk(on)
+  on('classic.SessionStart', async () => ({}))
+  on('session.start', async () => ({ cwd: '/p' }) as never)
+  on('session.usage', async () => ({ value: measure(60_000) as never }))
+  await $.session.start({ cwd: '/p' } as never)
+  await $.session.measure(measure(60_000))
+  await $.turn.start({ text: '/kokpit:handoff', turnId: 't1' })
+  await $.skill.prompt({ skill: 'kokpit:handoff', text: '' })
+  files['thread.md'] = Date.parse('2026-10-13T10:00:10Z')
+  await $.turn.complete({ ...TURN_END, turnId: 't1' })
+  await clock.settle()
+  expect(ran.map(r => r.command)).toEqual(['clear'])
+  expect(mem[flow('pendingMode')]).toBe('report')
+
+  await $.classic.SessionStart({ source: 'clear' })
+  await clock.settle()
+  expect(ran[1]).toEqual({ command: 'kokpit:resume', args: 'thread auto-clear' })
+})
+
+test('clear by itself: below the critical threshold a running agent is waited for, past it it is paused and restarted', async ($, on) => {
+  const ran: Ran = []
+  const mem: Record<string, unknown> = { 'handoff-settings': { autoClear: true, soft: null, critical: null } }
+  let agents = [{ id: 'a1', description: 'model ifryt', type: 'general-purpose', status: 'running' }]
+  const stopped: string[] = []
+  on('tool.call', { tool: 'TaskStop' }, async (_$, e) => {
+    stopped.push(String((e as { task_id?: string }).task_id))
+    agents = []
+    return { result: {} as never }
+  })
+  const clock = engine(on, ran, mem)
+  const files: Record<string, number> = {}
+  on('fs.exists', () => ({ value: true }))
+  on('fs.list', (_$, e) => ({
+    value: (String(e.path).endsWith('/paused')
+      ? Object.keys(io.written).filter(f => f.startsWith('.claude/kokpit/paused/')).map(f => ({ name: f.split('/').pop(), kind: 'file' as const, size: 1, mtimeMs: 0 }))
+      : Object.keys(files).map(name => ({ name, kind: 'file' as const, size: 1, mtimeMs: files[name] ?? 0 }))) as never,
+  }))
+  on('fs.stat', (_$, e) => ({ value: { kind: 'file' as const, size: 1, mtimeMs: files[e.path.split('/').pop() ?? ''] ?? 0 } as never }))
+  const io = desk(on)
+  on('agent.list', () => ({ value: agents as never }))
+  on('ui.toast', () => ({ value: undefined }) as never)
+  on('classic.SessionStart', async () => ({}))
+  const spawns: { prompt: string; model?: string; background: boolean }[] = []
+  on('agent.spawn', async (_$, e) => {
+    spawns.push({ prompt: e.prompt, model: e.model, background: e.background })
+    return { model: e.model ?? 'claude-sonnet-5-5', agentId: spawns.length === 1 ? 'a1' : 'a2' }
+  })
+  on('session.start', async () => ({ cwd: '/p' }) as never)
+  on('session.usage', async () => ({ value: measure(60_000) as never }))
+  await $.session.start({ cwd: '/p' } as never)
+  await $.session.measure(measure(60_000))
+
+  // the agent starts in the background: Kokpit keeps its brief
+  await $.agent.spawn({ tool_use_id: 'u1', prompt: 'Build the ifryt model.', description: 'model ifryt', subagentType: 'general-purpose', parentModel: 'claude-opus-5-5', background: true, fork: false } as never)
+  await $.tool.call({ tool: 'Write', file_path: '/p/art/ifryt.gd', content: 'x', agentId: 'a1' } as never)
+
+  // t1: a handoff below the critical threshold: clearing waits for the agent
+  await $.turn.start({ text: '/kokpit:handoff', turnId: 't1' })
+  await $.skill.prompt({ skill: 'kokpit:handoff', text: '' })
+  files['thread.md'] = Date.parse('2026-10-13T10:00:10Z')
+  await $.turn.complete({ ...TURN_END, turnId: 't1' })
+  await clock.settle()
+  expect(ran).toHaveLength(0)
+  expect(stopped).toHaveLength(0)
+
+  // t2: the conversation goes on past the critical threshold (170k in a 200k window): refresh, then pause
+  await $.session.measure(measure(175_000))
+  await turn($, 't2', 'Working on.')
+  await clock.settle()
+  expect(ran.map(r => r.command)).toEqual(['kokpit:handoff'])
+  await $.turn.start({ text: '', turnId: 't3' })
+  files['thread.md'] = Date.parse('2026-10-13T10:00:30Z')
+  await $.turn.complete({ ...TURN_END, turnId: 't3' })
+  await clock.settle()
+  await clock.advance(2_000)
+  await clock.settle()
+  expect(stopped).toEqual(['a1'])
+  expect(ran.map(r => r.command)).toEqual(['kokpit:handoff', 'clear'])
+  expect(mem[flow('pendingMode')]).toBe('continue')
+  const record = JSON.parse(io.written['.claude/kokpit/paused/thread.json'] ?? '{}')
+  expect(record.agents[0]).toMatchObject({ id: 'a1', prompt: 'Build the ifryt model.', files: ['/p/art/ifryt.gd'] })
+
+  // after the clear: the resume continues the work and gets the restart note
+  await $.classic.SessionStart({ source: 'clear' })
+  await clock.settle()
+  expect(ran[2]).toEqual({ command: 'kokpit:resume', args: 'thread' })
+  const resumed = await $.skill.prompt({ skill: 'kokpit:resume', text: 'CHOSEN THREAD: /p/.claude/handoffs/thread.md\n' })
+  expect(resumed.text).toContain('kokpit-resume:a1')
+
+  // the model starts it with the marker: Kokpit puts the brief back, and the record is used up
+  await $.agent.spawn({ tool_use_id: 'u2', prompt: 'kokpit-resume:a1', description: 'model ifryt', subagentType: 'general-purpose', parentModel: 'claude-opus-5-5', background: true, fork: false } as never)
+  expect(spawns[1]?.prompt).toContain('Build the ifryt model.')
+  expect(spawns[1]?.prompt).toContain('do not start over')
+  expect(spawns[1]?.model).toBe('claude-sonnet-5-5')
+  expect(io.written['.claude/kokpit/paused/thread.json']).toBe('{}\n')
+  const again = await $.agent.spawn({ tool_use_id: 'u3', prompt: 'kokpit-resume:a1', description: 'x', subagentType: 'general-purpose', parentModel: 'claude-opus-5-5', background: true, fork: false } as never)
+  expect(again.deny).toContain('no paused agent')
+})
+
+test('threads live in the main checkout: a session in a worktree reads and saves them there', async ($, on) => {
+  const ran: Ran = []
+  const mem: Record<string, unknown> = {}
+  const clock = engine(on, ran, mem, '/p/.claude/worktrees/w1', '/p/.claude/worktrees/w1')
+  on('process.run', async () => ({ value: { exitCode: 0, stdout: '/p/.git\n', stderr: '' } as never }))
+  const listed: string[] = []
+  on('fs.exists', () => ({ value: true }))
+  on('fs.list', (_$, e) => {
+    listed.push(String(e.path))
+    return { value: [{ name: 'thread.md', kind: 'file' as const, size: 1, mtimeMs: Date.parse('2026-10-13T10:00:10Z') }] as never }
+  })
+  on('fs.stat', () => ({ value: { kind: 'file' as const, size: 1, mtimeMs: Date.parse('2026-10-13T10:00:10Z') } as never }))
+  await $.session.measure(measure(60_000))
+  await $.turn.start({ text: '/kokpit:handoff', turnId: 't1' })
+  await $.skill.prompt({ skill: 'kokpit:handoff', text: '' })
+  await $.turn.complete({ ...TURN_END, turnId: 't1' })
+  await clock.settle()
+  expect(listed).toContain('/p/.claude/handoffs')
+  const write = await $.tool.check({ tool: 'Write', input: { file_path: '/p/.claude/handoffs/new.md' } } as never)
+  expect(write).toMatchObject({ decision: 'allow' })
 })

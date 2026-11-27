@@ -3,31 +3,58 @@
 # not fail on a project without git or without a handoff directory.
 SESSION="${1:-unknown}"
 PROJECT="${2:-$PWD}"
-# The current checkout first: `.claude/handoffs/` is usually gitignored, so a worktree session keeps its
-# own copy, which CLAUDE_PROJECT_DIR (the main checkout) does not see (resume/scripts/find.sh does the same).
+# One home for threads: `.claude/handoffs/` of the repo's main checkout (the parent of git's common dir),
+# whichever worktree the session runs in (resume/scripts/find.sh does the same). Worktrees may hold stale
+# copies from before 0.15 (the folder is usually gitignored and an app copies it into a new worktree).
 HERE="$(git rev-parse --show-toplevel 2>/dev/null || true)"
 [ -z "$HERE" ] && HERE="$PROJECT"
-DIR="$HERE/.claude/handoffs"
-OTHER_DIR=""
-[ "$(cd "$PROJECT/.claude/handoffs" 2>/dev/null && pwd -P)" != "$(cd "$DIR" 2>/dev/null && pwd -P)" ] && [ -d "$PROJECT/.claude/handoffs" ] && OTHER_DIR="$PROJECT/.claude/handoffs"
+threads_home() {
+  local common
+  common="$(git -C "$1" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"
+  [ -z "$common" ] && common="$(cd "$1" 2>/dev/null && cd "$(git rev-parse --git-common-dir 2>/dev/null)" 2>/dev/null && pwd -P)"
+  case "$common" in */.git) echo "${common%/.git}" ;; *) echo "$1" ;; esac
+}
+ROOT_HOME="$(threads_home "$HERE")"
+DIR="$ROOT_HOME/.claude/handoffs"
 cd "$HERE" 2>/dev/null || true
 
 echo "date: $(date '+%Y-%m-%d %H:%M %Z')"
-echo "project: $PROJECT"
-[ "$HERE" != "$PROJECT" ] && echo "current checkout: $HERE (handoffs: $DIR)"
+echo "project: $ROOT_HOME"
+[ "$HERE" != "$ROOT_HOME" ] && echo "this session works in the worktree: $HERE"
 echo "session: $SESSION"
+echo "THREADS DIR: $DIR (every thread of this repo lives here, also for sessions in worktrees)"
 
 is_thread() { case "$1" in *.archive.md|*.archiwum.md) return 1 ;; *.md) return 0 ;; *) return 1 ;; esac; }
+by_session() { # $1 = directory
+  local f
+  for f in "$1"/*.md; do
+    [ -f "$f" ] && is_thread "$f" && grep -q -m1 "^sessions:.*$SESSION" "$f" 2>/dev/null && { echo "$f"; return; }
+  done
+}
 
 # This session's thread = the file whose `sessions:` frontmatter lists this session.
-THREAD=""
-for d in "$DIR" $OTHER_DIR; do
-  [ -d "$d" ] && [ -z "$THREAD" ] || continue
-  for f in $(grep -l -m1 "^sessions:.*$SESSION" "$d"/*.md 2>/dev/null); do
-    if is_thread "$f"; then THREAD="$f"; break; fi
+THREAD="$(by_session "$DIR")"
+if [ -z "$THREAD" ]; then
+  # Pinned in an old worktree copy (before 0.15): move it home, unless the home has a thread of that name.
+  for c in "$HERE/.claude/handoffs" "$PROJECT/.claude/handoffs"; do
+    [ -d "$c" ] && [ "$(cd "$c" && pwd -P)" != "$(cd "$DIR" 2>/dev/null && pwd -P)" ] || continue
+    OLD="$(by_session "$c")"
+    [ -n "$OLD" ] || continue
+    B="$(basename "$OLD")"
+    if [ -e "$DIR/$B" ]; then
+      echo "COPY IN A WORKTREE: this session is pinned in $OLD, but the home has $DIR/$B. Write to the"
+      echo "home file and carry over what only the copy has; tell the user the copy can be deleted."
+      THREAD="$DIR/$B"
+    else
+      mkdir -p "$DIR" && mv "$OLD" "$DIR/$B" && THREAD="$DIR/$B"
+      for suffix in .archive.md .archiwum.md; do
+        [ -f "${OLD%.md}$suffix" ] && [ ! -e "$DIR/${B%.md}$suffix" ] && mv "${OLD%.md}$suffix" "$DIR/"
+      done
+      [ -n "$THREAD" ] && echo "MOVED HOME: $OLD → $THREAD (tell the user)"
+    fi
+    break
   done
-done
-[ -n "$THREAD" ] && DIR="$(dirname "$THREAD")"
+fi
 if [ -n "$THREAD" ]; then
   echo "THREAD OF THIS SESSION: $THREAD"
   mkdir -p "$DIR/.previous" 2>/dev/null
@@ -45,7 +72,7 @@ if [ -n "$THREAD" ]; then
     echo "THREAD ARCHIVE: none (create it next to the thread when there is something to move)"
   fi
 else
-  echo "THREAD OF THIS SESSION: none — pick an existing thread from the list below or start a new one"
+  echo "THREAD OF THIS SESSION: none — pick an existing thread from the list below or start a new one in THREADS DIR"
 fi
 
 if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then

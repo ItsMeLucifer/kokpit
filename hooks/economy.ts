@@ -1,6 +1,7 @@
 // Economy: subagent model/effort split and dynamic effort for the main conversation. Engine wiring is in register.tsx.
 
 import type { Calibration, EconomySettings, EconomyStats, Level, Plan, Rating } from '../types'
+import { BRIEF_RULES } from './delegation'
 
 export type { Calibration, EconomySettings, EconomyStats, Level, Plan, Rating }
 
@@ -277,7 +278,9 @@ export function splitNote(mainModel = ''): string {
     splitRubric(mainModel) +
     'Do not delegate trivia (up to ~3 steps): a subagent reads the files again from scratch, so it costs more. ' +
     'A subagent prompt must be self-contained (files, goal, acceptance criteria, "do not ask, decide and ' +
-    'explain"), because it does not see this conversation. Two subagents must never edit the same file in parallel.'
+    'explain"), because it does not see this conversation. ' +
+    BRIEF_RULES +
+    'Two subagents must never edit the same file in parallel.'
   )
 }
 
@@ -286,7 +289,8 @@ export function splitNoteStandard(rulesFile: string, mainModel = ''): string {
   return (
     `Kokpit (work split): the rules for splitting and delegating work and for subagent briefs are in org-rules ` +
     `(${rulesFile}). ` +
-    splitRubric(mainModel).trimEnd()
+    splitRubric(mainModel) +
+    BRIEF_RULES.trimEnd()
   )
 }
 

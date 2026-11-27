@@ -4,7 +4,7 @@ description: Changes the non-negotiable rules (.claude/org-rules/) on the Owner'
 disable-model-invocation: true
 argument-hint: "<what to change in org-rules>"
 ---
-<!-- core: 0.12.0 (Kokpit repo standard; updated by /kokpit:setup) -->
+<!-- core: 0.13.0 (Kokpit repo standard; updated by /kokpit:setup) -->
 
 # Changing org-rules
 

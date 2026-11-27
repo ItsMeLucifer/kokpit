@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# core: 0.12.0 (Kokpit repo standard; updated by /kokpit:setup, do not edit by hand)
+# core: 0.13.0 (Kokpit repo standard; updated by /kokpit:setup, do not edit by hand)
 """Consistency of project knowledge and agent rules (standard library only, about 1 s).
 
     python3 tools/docs/check_docs.py                  # check everything, exit 1 on errors

@@ -1,6 +1,6 @@
 {
   "name": "kokpit",
-  "version": "0.14.2",
+  "version": "0.16.0",
   "description": "A band above the prompt (context, usage limits, task progress, background jobs, decisions), handoffs to thread files instead of compaction, a decision register, background jobs, Economy (subagent models and effort matched to the task), workshop skills and a repo-standard setup.",
   "author": {
     "name": "Patryk Bożek",
@@ -21,20 +21,20 @@
     },
     "handoffTokens": {
       "type": "number",
-      "title": "Handoff threshold (soft, context tokens)",
-      "description": "From how many context tokens a handoff is offered, or done after a finished task. Never later than 75% of the model window.",
+      "title": "Clear threshold (context tokens)",
+      "description": "From how many context tokens a handoff is offered, or done after a finished task. Never later than 75% of the model window. The choice in /kokpit → Handoff & tools overrides this.",
       "default": 150000
     },
     "handoffHardTokens": {
       "type": "number",
-      "title": "Hard handoff threshold (context tokens)",
-      "description": "From how many tokens a handoff starts at the end of a turn even mid-work or after a question. 0 = soft threshold + 100,000; never beyond 85% of the window.",
+      "title": "Critical threshold (context tokens)",
+      "description": "From how many tokens a handoff starts at the end of a turn even mid-work or after a question; with \"Clear by itself\" on in /kokpit, background agents are paused for the clear and started again after the resume. 0 = clear threshold + 100,000; never beyond 85% of the window. The choice in /kokpit overrides this.",
       "default": 0
     },
     "handoffClear": {
       "type": "string",
       "title": "Clearing after a handoff",
-      "description": "message = after the thread is saved, your next message clears the conversation, resumes the thread and goes to the new session together with the last two answers (also saved in .claude/kokpit/previous/); button = only \"Clear and resume\".",
+      "description": "message = after the thread is saved, your next message clears the conversation, resumes the thread and goes to the new session together with the last two answers (also saved in .claude/kokpit/previous/); button = only \"Clear and resume\". \"Clear by itself\" in /kokpit → Handoff & tools makes it fully automatic.",
       "options": [
         "message",
         "button"

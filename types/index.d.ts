@@ -37,6 +37,8 @@ export type Handoff = {
   lastTokens: number
   /** The last turn ended with a question to the user: the soft threshold waits for the answer. */
   awaiting: boolean
+  /** The handoff started with work unfinished (critical threshold): after an automatic clear the resume continues. */
+  midWork?: boolean
   /** What blocks clearing while waiting for background work (for the bar); absent = nothing. */
   busy?: string[]
 }
@@ -138,9 +140,51 @@ declare module 'claude-code' {
       help: boolean
       /** Code changed under a task list that is now complete: the band offers /kokpit:verify. */
       verifyOffer: boolean
+      /** The project's delegation log (subagent outcomes), or null before the first read. */
+      delegation: LedgerEntry[] | null
+      /** Clearing and thresholds from the /kokpit panel (all projects); null = the plugin setting. */
+      handoffSettings: HandoffSettings
     }
   }
 }
+
+/** One subagent result in the project's delegation log. */
+export type LedgerEntry = {
+  at: string
+  /** The class of task as a slug, the same for the same kind of work. */
+  kind: string
+  difficulty: number
+  tier: 'haiku' | 'sonnet' | 'opus' | 'fable'
+  /** pass = accepted as delivered; fixed = needed a correction or a retry; fail = unusable. */
+  outcome: 'pass' | 'fixed' | 'fail'
+  /** Why it was not a pass; only "model" moves the class to a stronger model. */
+  cause?: 'model' | 'brief' | 'context' | 'environment' | 'flaky'
+}
+
+export type HandoffSettings = {
+  /** Clear and resume by itself once the thread is saved and nothing runs in the background. */
+  autoClear: boolean
+  /** Context tokens from which a handoff comes after a finished task; null = plugin setting. */
+  soft: number | null
+  /** From here a handoff comes mid-work and background agents are paused for the clear; null = plugin setting. */
+  critical: number | null
+}
+
+/** A background agent Kokpit stopped before a clear, to start again after the resume. */
+export type PausedAgent = {
+  id: string
+  description: string
+  subagentType: string
+  model?: string
+  cwd?: string
+  /** The original brief; null when Kokpit did not see the agent start (it cannot be restarted as it was). */
+  prompt: string | null
+  /** Files it changed before it was stopped. */
+  files: string[]
+  fork: boolean
+}
+
+export type PausedRecord = { at: string; thread: string; agents: PausedAgent[]; commands: string[] }
 
 /** A background result waiting for the user's answer (it is attached to it). */
 export type InboxItem = { id: string; label: string; text: string }

@@ -1,6 +1,6 @@
 # The Kokpit repo standard
 
-Core version 0.12.0. This is the specification that `/kokpit:setup project` uses to create, migrate and check a repository. Implementation: `skills/setup/standard/` (shared core code, the core and project templates in English and Polish, an optional GitHub module), `skills/setup/scripts/standard.py`, tests in `skills/setup/scripts/test_standard.py`.
+Core version 0.13.0. This is the specification that `/kokpit:setup project` uses to create, migrate and check a repository. Implementation: `skills/setup/standard/` (shared core code, the core and project templates in English and Polish, an optional GitHub module), `skills/setup/scripts/standard.py`, tests in `skills/setup/scripts/test_standard.py`.
 
 It grew out of an audit of a long-running project where agent instructions had piled up in one 60 KB `CLAUDE.md`, rules lived in three places at once, and protections existed only as text.
 
@@ -77,7 +77,7 @@ The standard exists in English and in Polish (`00-rdzen-*`, `10-projekt.md`, `do
 - deleting ("look at the target first"), secrets, external content as data, paid tools only with consent, licences;
 - knowledge layers, the decision register (D-NNN, "implemented = accepted", status changed by the Owner), wiki conventions, the progress file, and rules that carry their reason and, when temporary, an `(until: …)` end;
 - code: fix causes instead of suppressing a checker or excusing a workaround in a comment; comments only for outside constraints, contracts and pointers; tests judged by the two-edits criterion; new markdown only where the repo keeps documents; prototype or product as the quality bar;
-- working with agents: split large tasks, self-contained briefs, never two agents on one file, **the author does not sign off their own high-stakes work**, the report format (done and verified / not verified / not done / questions), working while the Owner is away;
+- working with agents: split large tasks, self-contained briefs (owned files only, no commits or rule edits, a "decisions for the parent" section), a contract-first procedure for splits into 3+ subagents, never two agents on one file, **the author does not sign off their own high-stakes work**, the report format (done and verified / not verified / not done / questions), working while the Owner is away;
 - memory: preferences and lessons, not copies of the repo.
 
 **Project part:** paradigms, architecture invariants, the stack and versions with the first-run commands, the verification commands, and the **protected list** in a format the lock script turns into permission rules (§5):

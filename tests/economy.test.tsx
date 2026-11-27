@@ -386,7 +386,13 @@ test('stats view: effort ranges from raw data, signed subagents, share of the we
 })
 
 test('in a session: steps with usage count savings, weekly readings calibrate, the pane shows the share', async ($, on) => {
-  const mem: Record<string, unknown> = { 'economy:/p': ON }
+  const mem: Record<string, unknown> = {
+    'economy:/p': ON,
+    'delegation:/p': [
+      { at: '2026-11-01T10:00:00Z', kind: 'shader-port', difficulty: 4, tier: 'sonnet', outcome: 'fail', cause: 'model' },
+      { at: '2026-11-02T10:00:00Z', kind: 'shader-port', difficulty: 4, tier: 'opus', outcome: 'pass' },
+    ],
+  }
   const sent: { effort?: unknown; model: string }[] = []
   engine(on, mem, sent)
   on('tool.call', async () => ({ result: {} as never }))
@@ -417,6 +423,8 @@ test('in a session: steps with usage count savings, weekly readings calibrate, t
   expect(drawn).toContain('saved on Max x20')
   expect(drawn).toContain('2.5%–7.5%')
   expect(drawn).toContain('10 of 10 steps lower')
+  expect(drawn).toContain('shader-port')
+  expect(drawn).toContain('at least opus (sonnet lacked capability)')
   expect(drawn).not.toContain('How this is computed')
   await pane.press({ key: 'kokpit-help' })
   expect(JSON.stringify(await pane.drawn())).toContain('Calibration')
@@ -426,8 +434,17 @@ test('in a session: steps with usage count savings, weekly readings calibrate, t
   expect(JSON.stringify(await pane.drawn())).toContain('calibrating')
   await pane.press({ key: 'tab-handoff' })
   const h = JSON.stringify(await pane.drawn())
-  expect(h).toContain('Thresholds')
+  expect(h).toContain('Critical threshold')
   expect(h).toContain('Decisions')
+  // clearing and thresholds: one switch, two choices, stored for all projects
+  await pane.press({ key: 'h-auto' })
+  await pane.press({ key: 'h-soft-300000' })
+  await pane.press({ key: 'h-crit-500000' })
+  expect(mem['handoff-settings']).toEqual({ autoClear: true, soft: 300_000, critical: 500_000 })
+  const after = JSON.stringify(await pane.drawn())
+  expect(after).toContain('● 300k')
+  expect(after).toContain('● 500k')
+  expect(after).toContain('by itself')
 })
 
 test('subagents above the conversation\'s model (Fable under Opus) are kept apart from the savings; the pane names the version', async ($, on) => {
@@ -600,4 +617,69 @@ test('Haiku roles: reporter and mechanic registered with split on, Haiku only in
   expect(registered.every(a => a.model === 'haiku')).toBe(true)
   expect(registered[0]?.tools).not.toContain('Edit')
   expect(registered[1]?.prompt).toContain('ABORTED')
+})
+
+// ── Delegation log (adapted from Hermes advanced-delegation) ──
+
+import { entryFrom, kindSlug, ledgerNote, routes } from '../hooks/delegation'
+import type { LedgerEntry } from '../hooks/delegation'
+
+const run = (at: string, tier: LedgerEntry['tier'], outcome: LedgerEntry['outcome'], cause?: LedgerEntry['cause'], kind = 'test-fix'): LedgerEntry => ({
+  at: `2026-11-${at}T10:00:00Z`,
+  kind,
+  difficulty: 3,
+  tier,
+  outcome,
+  ...(cause ? { cause } : {}),
+})
+
+test('delegation log: a failure on capability raises the class, other causes do not, passes in a row suggest a tier cheaper', () => {
+  expect(kindSlug('Godot scene  edit!')).toBe('godot-scene-edit')
+  expect(entryFrom({ kind: 'x', model: 'claude-sonnet-5-5', outcome: 'fixed' }, 'now')).toContain('cause')
+  expect(entryFrom({ kind: 'x', model: 'gpt', outcome: 'pass' }, 'now')).toContain('model')
+  expect(entryFrom({ kind: 'Test fix', model: 'sonnet', outcome: 'pass', difficulty: 9 }, 'now')).toEqual({
+    at: 'now', kind: 'test-fix', difficulty: 5, tier: 'sonnet', outcome: 'pass',
+  })
+
+  // a weak brief is fixed without a stronger model
+  expect(routes([run('01', 'sonnet', 'fixed', 'brief')])[0]).toMatchObject({ floor: null, tryTier: null })
+  // a failure on capability: at least opus
+  const raised = routes([run('01', 'sonnet', 'pass'), run('02', 'sonnet', 'fail', 'model')])[0]
+  expect(raised).toMatchObject({ floor: 'opus', failed: { tier: 'sonnet' }, runs: 2, firstTry: 1 })
+  expect(ledgerNote([raised!])).toContain('"test-fix": at least opus (sonnet failed on capability 2026-11-02)')
+  // three first-try passes on opus: sonnet failed recently, so no suggestion yet
+  const recent = [run('02', 'sonnet', 'fail', 'model'), run('03', 'opus', 'pass'), run('04', 'opus', 'pass'), run('05', 'opus', 'pass')]
+  expect(routes(recent)[0]?.tryTier).toBeNull()
+  // in a class without such a failure: try one tier cheaper, never Haiku
+  const steady = ['03', '04', '05'].map(d => run(d, 'opus', 'pass', undefined, 'docs'))
+  expect(routes(steady)[0]).toMatchObject({ tryTier: 'sonnet' })
+  expect(ledgerNote(routes(steady))).toContain('"docs": 3+ first-try passes in a row, try sonnet next')
+  expect(routes(['03', '04', '05'].map(d => run(d, 'sonnet', 'pass', undefined, 'docs')))[0]?.tryTier).toBeNull()
+  // a pass below the floor lowers it again
+  expect(routes([run('01', 'sonnet', 'fail', 'model'), run('02', 'sonnet', 'pass')])[0]?.floor).toBe('sonnet')
+  expect(ledgerNote(routes([run('01', 'opus', 'pass')]))).toBe('')
+})
+
+test('delegation log in a session: the note carries brief rules and the procedure, results are recorded, lessons reach the next conversation', async ($, on) => {
+  const mem: Record<string, unknown> = { 'economy:/p': { split: true, effort: false, floor: 'medium' } }
+  engine(on, mem, [])
+  on('prompt.compose', async () => ({ sections: [] }))
+  await $.session.start({ cwd: '/p' } as never)
+  const first = JSON.stringify(await $.prompt.compose(COMPOSE))
+  expect(first).toContain('Decisions for the parent to record')
+  expect(first).toContain('docs/large-split.md')
+  expect(first).toContain('mcp__kokpit__subagent_result')
+  expect(first).not.toContain('delegation log has learned')
+
+  const bad = await $.tool.call({ tool: 'mcp__kokpit__subagent_result', kind: 'shader port', model: 'sonnet', outcome: 'fail' } as never)
+  expect(JSON.stringify(bad)).toContain('cause')
+  const r = await $.tool.call({ tool: 'mcp__kokpit__subagent_result', kind: 'shader port', model: 'sonnet', difficulty: 4, outcome: 'fail', cause: 'model' } as never)
+  expect(JSON.stringify(r)).toContain('From now on for this class: \\"shader-port\\": at least opus')
+  expect(mem['delegation:/p']).toHaveLength(1)
+  // the note of this conversation does not change (the prompt cache)
+  expect(JSON.stringify(await $.prompt.compose(COMPOSE))).toBe(first)
+
+  // a new conversation: the lesson is in the note
+  await $.session.start({ cwd: '/p' } as never)
+  expect(JSON.stringify(await $.prompt.compose(COMPOSE))).toContain('\\"shader-port\\": at least opus')
 })

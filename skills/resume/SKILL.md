@@ -18,11 +18,12 @@ The script has already pinned this session to the chosen thread (`sessions:`), s
 ## Steps
 
 1. **Read the thread file in full** (the thread itself, not its archive). Most important: Next steps, Decisions, Tried and dropped, User notes and pitfalls. Open the archive file (`<thread>.archive.md`, or `.archiwum.md` for a Polish thread) only when something is missing or the plan touches a matter the thread points to the archive for.
-2. **Check that it is current.** Compare "Current state" with what the script showed (commits and changes since `updated`). If something drifted apart, say what in one sentence.
+2. **Check that it is current.** "NEWER COPY IN A WORKTREE": read that copy too and carry over into the chosen thread what only the copy has (protected-section points and log entries word for word; summarized sections from the newer one), then say the copy can be deleted. "MOVED HOME": mention it in one line. Compare "Current state" with what the script showed (commits and changes since `updated`). If something drifted apart, say what in one sentence.
 3. **Read the files from "Quick start"** in the given order. Do not read the whole repository up front.
 4. **Report briefly** (up to 6 lines): thread, goal, state in one sentence, open questions for the user (if any), step 1.
 5. **Act.** If step 1 is unambiguous, reversible and not waiting for the user, start it right away in the same answer. If it waits for a decision, ask one question and stop.
    **Exception: the script printed "AFTER CLEAR":** Kokpit cleared the conversation because the user wrote something, and their message comes right after this answer (with the previous conversation's latest answers in context). Report in 1–2 lines, the first being exactly `Kokpit · resumed thread: <thread>` (after this mark a parent session skips the note about this turn), and do not start step 1 or ask questions: that message gives the direction.
+   **"AUTO CLEAR":** Kokpit cleared by itself after a finished piece of work. Report in up to 4 lines, the first being exactly `Kokpit · resumed thread: <thread>`, then the state and step 1 as a proposal; do not start it (the user gives the next direction). Restarting paused agents (below, when listed) is not "step 1": do it in any case.
 
 ## Rules
 

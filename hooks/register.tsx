@@ -7,6 +7,9 @@ import type {
   EconomyState,
   Handoff,
   HandoffLogEntry,
+  HandoffSettings,
+  PausedAgent,
+  PausedRecord,
   InboxItem,
   Job,
   QualitySettings,
@@ -27,6 +30,34 @@ import {
   splitArgs,
 } from './background'
 import type { ProjectConfig } from './background'
+import {
+  CAUSES,
+  OUTCOMES,
+  RESULT_NOTE,
+  RESULT_TOOL,
+  addEntry,
+  entryFrom,
+  largeSplitNote,
+  ledgerNote,
+  parseLedger,
+  routes,
+} from './delegation'
+import type { LedgerEntry } from './delegation'
+import {
+  CRITICAL_CHOICES,
+  CRITICAL_EXTRA,
+  HANDOFF_SETTINGS_0,
+  SOFT_CHOICES,
+  PAUSED_DIR,
+  afterRestart,
+  continuePrompt,
+  hardThresholdFor,
+  markerId,
+  parseHandoffSettings,
+  pausedNote,
+  thresholdFor,
+  thresholds,
+} from './pause'
 import { applyPrompt, entryFormat, isQuestion, nextId, parseDecisions, pending, resolveDecision, toApply } from './decisions'
 import type { Decision, Language } from './decisions'
 import {
@@ -110,6 +141,7 @@ const handoffAtom = atom(
   },
 )
 const resumableAtom = atom({ plugin: 'kokpit', key: 'resumable' } as const, null)
+const handoffSettingsAtom = atom({ plugin: 'kokpit', key: 'handoffSettings' } as const, HANDOFF_SETTINGS_0)
 const jobsAtom = atom({ plugin: 'kokpit', key: 'jobs' } as const, [])
 const decisionsAtom = atom({ plugin: 'kokpit', key: 'decisions' } as const, null)
 const answersAtom = atom({ plugin: 'kokpit', key: 'answers' } as const, [])
@@ -128,6 +160,7 @@ const ECONOMY_0: EconomyState = {
 }
 const economyAtom = atom({ plugin: 'kokpit', key: 'economy' } as const, ECONOMY_0)
 const economyStatsAtom = atom({ plugin: 'kokpit', key: 'economyStats' } as const, null as EconomyStats | null)
+const delegationAtom = atom({ plugin: 'kokpit', key: 'delegation' } as const, null as LedgerEntry[] | null)
 const localAtom = atom(
   { plugin: 'kokpit', key: 'local' } as const,
   null as { models: string[]; opencode: boolean; ollama: boolean } | null,
@@ -170,7 +203,7 @@ export const PENDING_TTL_MS = 5 * 60_000
 /** Bridge keys of a window silent this long are leftovers (window closed mid-clear). */
 const FLOW_ORPHAN_MS = 60 * 60_000
 /** Keys of the bridge across /clear; in the store always with the window id (`pendingPrompt:<id>`). */
-const FLOW_KEYS = ['pendingPrompt', 'pendingResume', 'pendingPrevious', 'pendingAt'] as const
+const FLOW_KEYS = ['pendingPrompt', 'pendingResume', 'pendingPrevious', 'pendingMode', 'pendingAt'] as const
 type FlowKey = (typeof FLOW_KEYS)[number]
 /** Keys of old code (shared by all windows), removed at start. */
 const LEGACY_KEYS = ['pendingContext', 'pendingPrompt', 'pendingResume', 'pendingPrevious']
@@ -226,12 +259,6 @@ export function orphanKeys(keys: string[], store: Record<string, unknown>, now: 
   }
   return keys.filter(k => LEGACY_KEYS.includes(k) || stale.has(flowOwner(k) ?? ''))
 }
-/** Never later than at 75% of the window: the engine's auto-compact comes around 95%. */
-const WINDOW_CAP = 0.75
-/** Default hard threshold = soft threshold + this many tokens. */
-export const HARD_EXTRA = 100_000
-/** Hard threshold cap, as a fraction of the context window. */
-const HARD_CAP = 0.85
 const LOG_LIMIT = 300
 
 export type Mode = 'button' | 'break' | 'auto'
@@ -339,9 +366,15 @@ export const THREAD_HEADINGS: Record<Language, string[]> = {
   ],
 }
 
-/** Appended to the handoff skill: which language a new thread is written in. */
+/** Appended to the handoff skill when lessons are off in /kokpit. */
 export const LESSONS_OFF_NOTE =
   '\n\nKokpit: lessons are turned off for this project in /kokpit. Skip the step "Lessons for skills and checks".'
+
+/** Appended to the handoff skill when Kokpit clears by itself. */
+export const AUTO_CLEAR_NOTE =
+  '\n\nKokpit clears the conversation and resumes the thread by itself after this answer (after the background ' +
+  'results when something still runs; past the critical threshold it pauses background agents and starts them ' +
+  'again after the resume). In step 7 say that instead of "The next message clears…".'
 
 export function handoffLanguageNote(lang: Language): string {
   if (lang === 'en') {
@@ -407,16 +440,7 @@ export function toUsage(u: {
   }
 }
 
-/** Token threshold: the setting, but never beyond 75% of the model's window. */
-export function thresholdFor(setting: number, window: number): number {
-  return Math.min(setting, Math.floor(window * WINDOW_CAP))
-}
-
-/** Hard threshold: the setting (0 = soft + HARD_EXTRA), at most HARD_CAP of the window, never below soft. */
-export function hardThresholdFor(soft: number, setting: number, window: number): number {
-  const wanted = setting > 0 ? setting : soft + HARD_EXTRA
-  return Math.max(soft, Math.min(wanted, Math.floor(window * HARD_CAP)))
-}
+export { thresholdFor, hardThresholdFor }
 
 /** Whether the band offers a handoff: threshold passed, not snoozed, not right after the previous one. */
 export function isDue(tokens: number | null, threshold: number, h: Handoff): boolean {
@@ -621,7 +645,7 @@ let currentTurnId = ''
 let pendingMode: LogMode = 'button'
 let pendingTokens = 0
 /** Commands and other background tasks from the last classic.Stop (the engine reports them only there). */
-let lastBackground: { type: string; description: string }[] = []
+let lastBackground: { id: string; type: string; description: string }[] = []
 let turnRunning = false
 let codeUnderTasks = false
 /** Checks that reported something in this session, for the Quality tab. */
@@ -745,6 +769,12 @@ async function calibrate($: EngineInterface, weekPercent: number): Promise<void>
 
 let projectRootCache: { root: string; project: string } | null = null
 
+/** Absolute path in the main checkout: threads and what goes with them have one home for all worktrees. */
+async function inHome($: EngineInterface, rel: string): Promise<string> {
+  if (rel.startsWith('/')) return rel
+  return (await projectRoot($)) + '/' + rel
+}
+
 /** Project root shared by all worktrees (parent of git's common dir); the session root outside git. */
 async function projectRoot($: EngineInterface): Promise<string> {
   const root = (await $.session.root()).replace(/\/+$/, '')
@@ -793,6 +823,27 @@ async function loadEconomy($: EngineInterface): Promise<EconomySettings> {
   const saved = parseSettings(await migrated($, await settingsKey($), [`ekonom:${project}`, `ekonom:${sessionRoot}`]))
   if (saved.split) {
     for (const a of HAIKU_AGENTS) await registerOnce(() => $.agent.register({ ...a, omitClaudeMd: a.name === 'reporter' } as never))
+    const ledger = await readLedger($)
+    delegationNote = ledgerNote(routes(ledger))
+    await registerOnce(() =>
+      $.tool.register({
+        name: RESULT_TOOL,
+        description:
+          "A checked subagent result for Kokpit's delegation log, which moves a class of task to a stronger model " +
+          "only after failures on capability. Call it as Kokpit's work-split note says.",
+        inputSchema: {
+          type: 'object',
+          properties: {
+            kind: { type: 'string', description: 'The class of task as a short slug, the same every time (e.g. "test-fix").' },
+            model: { type: 'string', description: 'The model the subagent ran on: haiku, sonnet, opus or fable.' },
+            difficulty: { type: 'integer', minimum: 1, maximum: 5 },
+            outcome: { type: 'string', enum: OUTCOMES },
+            cause: { type: 'string', enum: CAUSES, description: 'Only when outcome is not "pass".' },
+          },
+          required: ['kind', 'model', 'outcome'],
+        },
+      }),
+    )
   }
   if (saved.local && saved.localModel) {
     opencodeOk = await hasCommand($, 'opencode')
@@ -837,6 +888,19 @@ async function loadEconomy($: EngineInterface): Promise<EconomySettings> {
   return saved
 }
 
+/** The delegation log's lessons for the work-split note, fixed per conversation (a change would break the cache). */
+let delegationNote = ''
+
+async function ledgerKey($: EngineInterface): Promise<string> {
+  return `delegation:${await projectRoot($)}`
+}
+
+async function readLedger($: EngineInterface): Promise<LedgerEntry[]> {
+  const ledger = parseLedger(await $.store.get(await ledgerKey($)))
+  await update($, delegationAtom, () => ledger)
+  return ledger
+}
+
 async function saveEconomy($: EngineInterface, change: (s: EconomySettings) => EconomySettings): Promise<void> {
   const next = change((await read($, economyAtom)).saved)
   await $.store.set(await settingsKey($), next)
@@ -867,10 +931,10 @@ async function runSkill($: EngineInterface, name: string, args: string): Promise
   }
 }
 
-async function startHandoff($: EngineInterface, mode: LogMode): Promise<void> {
+async function startHandoff($: EngineInterface, mode: LogMode, midWork?: boolean): Promise<void> {
   const usage = await read($, usageAtom)
   const now = await $.clock.now()
-  await update($, handoffAtom, h => ({ ...h, running: true, startedAt: now, savedPath: null }))
+  await update($, handoffAtom, h => ({ ...h, running: true, startedAt: now, savedPath: null, midWork: midWork ?? h.midWork ?? false }))
   pendingMode = mode
   pendingTokens = usage?.contextTokens ?? 0
   try {
@@ -979,28 +1043,149 @@ async function saveAnswers($: EngineInterface, threadPath: string): Promise<void
   const answers = await read($, answersAtom)
   if (answers.length === 0) return
   const thread = threadName(threadPath)
-  const file = await inProject($, `${ANSWERS_DIR}/${thread}.md`)
+  const file = await inHome($, `${ANSWERS_DIR}/${thread}.md`)
   await attempt(async () => {
     await $.fs.write(file, answersMarkdown(thread, answers, new Date(await $.clock.now()).toISOString()))
     await flowSet($, 'pendingPrevious', file)
   }, undefined)
 }
 
+// ── Clearing: settings, thresholds, pausing background agents ──
+
+/** Plugin settings for handoffs (set in register); the panel's choices override them. */
+let handoffConfig: { soft: number; hard: number; clearMode: ClearMode } = { soft: 150_000, hard: 0, clearMode: 'message' }
+const HANDOFF_SETTINGS_KEY = 'handoff-settings'
+/** Briefs of the background agents this window started, for a pause before a clear (the module outlives /clear). */
+const agentRecords = new Map<string, PausedAgent>()
+const AGENT_RECORDS_MAX = 100
+/** "Pause agents and clear" was pressed: the next clear pauses instead of waiting. */
+let pauseNext = false
+/** A pause did not stop everything: do not try again in this conversation. */
+let pauseFailed = false
+
+async function loadHandoffSettings($: EngineInterface): Promise<void> {
+  const saved = parseHandoffSettings(await $.store.get(HANDOFF_SETTINGS_KEY))
+  await update($, handoffSettingsAtom, () => saved)
+}
+
+async function saveHandoffSettings($: EngineInterface, change: (s: HandoffSettings) => HandoffSettings): Promise<void> {
+  const next = change(await read($, handoffSettingsAtom))
+  await $.store.set(HANDOFF_SETTINGS_KEY, next)
+  await update($, handoffSettingsAtom, () => next)
+}
+
+async function limitsNow($: EngineInterface, window: number): Promise<{ soft: number; critical: number }> {
+  return thresholds(await read($, handoffSettingsAtom), handoffConfig, window)
+}
+
+async function pastCritical($: EngineInterface): Promise<boolean> {
+  const usage = await read($, usageAtom)
+  if (!usage || usage.contextTokens === null) return false
+  return usage.contextTokens >= (await limitsNow($, usage.contextWindow)).critical
+}
+
+async function pausedFile($: EngineInterface, thread: string): Promise<string> {
+  return inHome($, `${PAUSED_DIR}/${thread}.json`)
+}
+
+async function readPaused($: EngineInterface, file: string): Promise<PausedRecord | null> {
+  return attempt(async () => {
+    const r = JSON.parse(await $.fs.read(file)) as PausedRecord
+    return r && Array.isArray(r.agents) && r.agents.length + (r.commands?.length ?? 0) > 0 ? r : null
+  }, null)
+}
+
+/** The paused record holding agent `id`, with its file. */
+async function findPaused($: EngineInterface, id: string): Promise<{ file: string; record: PausedRecord; agent: PausedAgent } | null> {
+  const dir = await inHome($, PAUSED_DIR)
+  const entries = await attempt(() => $.fs.list(dir), [])
+  for (const entry of entries) {
+    if (entry.kind !== 'file' || !entry.name.endsWith('.json')) continue
+    const file = dir + '/' + entry.name
+    const record = await readPaused($, file)
+    const agent = record?.agents.find(a => a.id === id)
+    if (record && agent) return { file, record, agent }
+  }
+  return null
+}
+
+/** Stops background agents and commands, records them for the resume, then clears; waits instead if a stop fails. */
+async function pauseAndClear($: EngineInterface, path: string): Promise<void> {
+  pauseNext = false
+  type Info = { id: string; status: string; description: string; type: string; teammateId?: string; parentId?: string; model?: string; cwd?: string }
+  const busy = (await attempt(() => $.agent.list(), [] as Info[])).filter(
+    a => AGENT_BUSY.includes(a.status) && a.type !== 'teammate' && !a.teammateId,
+  )
+  const commands = lastBackground.filter(t => t.type !== 'subagent')
+  for (const a of busy) await attempt(() => $.tool.call({ tool: 'TaskStop', task_id: a.id }), undefined)
+  for (const c of commands) await attempt(() => $.tool.call({ tool: 'TaskStop', task_id: c.id }), undefined)
+  await $.clock.sleep(1500)
+  const still = (await attempt(() => $.agent.list(), [] as Info[])).filter(
+    a => AGENT_BUSY.includes(a.status) && busy.some(b => b.id === a.id),
+  )
+  if (still.length > 0) {
+    pauseFailed = true
+    await update($, handoffAtom, h => ({ ...h, clearAfter: false, clearWhenIdle: true, busy: still.map(a => a.description || a.type) }))
+    $.ui.toast(`Kokpit could not stop ${still.map(a => a.description || a.type).join(', ')}: clearing waits for their results.`)
+    await flushPrompt($)
+    return
+  }
+  const agents: PausedAgent[] = busy
+    .filter(a => !a.parentId)
+    .map(a => {
+      const known = agentRecords.get(a.id)
+      return known
+        ? { ...known, cwd: known.cwd ?? a.cwd, model: known.model ?? a.model }
+        : {
+            id: a.id,
+            description: a.description,
+            subagentType: a.type,
+            model: a.model,
+            cwd: a.cwd,
+            prompt: null,
+            files: [],
+            fork: false,
+          }
+    })
+  const thread = threadName(path)
+  const record: PausedRecord = {
+    at: new Date(await $.clock.now()).toISOString(),
+    thread,
+    agents,
+    commands: commands.map(c => c.description || c.type),
+  }
+  if (agents.length || record.commands.length) {
+    await attempt(async () => $.fs.write(await pausedFile($, thread), JSON.stringify(record, null, 2) + '\n'), undefined)
+  }
+  lastBackground = []
+  await update($, handoffAtom, h => ({ ...h, midWork: true }))
+  const n = agents.length + record.commands.length
+  if (n > 0) $.ui.toast(`Kokpit: paused ${n} background task${n === 1 ? '' : 's'} for the clear; agents start again after the resume.`)
+  await clearAndResume($, path, true)
+}
+
 /** /clear and resuming the thread in a new session (through $.store, because /clear ends this session). */
 async function clearAndResume($: EngineInterface, path: string, force = false): Promise<void> {
-  // Background results go only to this conversation, which /clear ends: wait for them unless forced.
+  // Background results go only to this conversation, which /clear ends: wait for them unless forced or paused.
   const busy = force ? [] : await backgroundWork($)
+  if (busy.length > 0 && (pauseNext || (!pauseFailed && (await read($, handoffSettingsAtom)).autoClear && (await pastCritical($))))) {
+    await pauseAndClear($, path)
+    return
+  }
   if (busy.length > 0) {
     await update($, handoffAtom, h => ({ ...h, clearAfter: false, clearWhenIdle: true, busy }))
     $.ui.toast(`Still running in the background: ${busy.join(', ')}. I will clear after their results, adding them to the thread first.`)
     await flushPrompt($)
     return
   }
-  await update($, handoffAtom, h => ({ ...h, clearAfter: false, clearWhenIdle: false, busy: undefined }))
+  pauseNext = false
+  const h = await update($, handoffAtom, x => ({ ...x, clearAfter: false, clearWhenIdle: false, busy: undefined }))
   const held = await takeInbox($)
   if (held.length > 0) await holdPrompt($, inboxText(held))
   await saveAnswers($, path)
-  await flowSet($, 'pendingResume', await inProject($, path))
+  // By itself: only a report after a finished piece of work, the work goes on when it was cut mid-way.
+  if ((await read($, handoffSettingsAtom)).autoClear) await flowSet($, 'pendingMode', h.midWork ? 'continue' : 'report')
+  await flowSet($, 'pendingResume', await inHome($, path))
   try {
     await $.command.run({ command: 'clear', args: '' })
   } catch {
@@ -1017,7 +1202,7 @@ async function refreshThenClear($: EngineInterface, mode: LogMode = 'button'): P
 }
 
 async function threadFiles($: EngineInterface): Promise<{ path: string; mtimeMs: number }[]> {
-  const dir = await inProject($, HANDOFF_DIR)
+  const dir = await inHome($, HANDOFF_DIR)
   if (!(await $.fs.exists(dir))) return []
   const files: { path: string; mtimeMs: number }[] = []
   for (const entry of await $.fs.list(dir)) {
@@ -1055,7 +1240,7 @@ async function finishHandoff($: EngineInterface, aborted: boolean, answer: strin
   // The skill's mark counts even when the file did not change (already up to date, or written in another worktree).
   const marked = aborted ? null : savedMark(answer)
   if (marked) {
-    await noteSaved($, (await inProject($, HANDOFF_DIR)) + '/' + marked + '.md')
+    await noteSaved($, (await inHome($, HANDOFF_DIR)) + '/' + marked + '.md')
     return
   }
   await update($, handoffAtom, x => ({ ...x, running: false, clearAfter: false }))
@@ -1370,6 +1555,7 @@ export const register: Register = (on, options) => {
   const hardSetting =
     typeof options?.handoffHardTokens === 'number' && options.handoffHardTokens > 0 ? options.handoffHardTokens : 0
   const clearMode = parseClearMode(options?.handoffClear)
+  handoffConfig = { soft: tokensSetting, hard: hardSetting, clearMode }
   const nudge = options?.taskNudge !== false
   const language = parseLanguage(options?.language)
   const decisionsSetting = typeof options?.decisionsFile === 'string' ? options.decisionsFile.trim() : ''
@@ -1387,6 +1573,7 @@ export const register: Register = (on, options) => {
     await refreshDecisions($, decisionsFile)
     await loadEconomy($).catch(() => ECONOMY_OFF)
     await loadQuality($).catch(() => undefined)
+    await loadHandoffSettings($).catch(() => undefined)
     try {
       const keys = await $.store.keys()
       const values: Record<string, unknown> = {}
@@ -1434,8 +1621,11 @@ export const register: Register = (on, options) => {
     // The prompt is rebuilt after /clear anyway, so Economy changes take effect here.
     await loadEconomy($).catch(() => ECONOMY_OFF)
     await loadQuality($).catch(() => undefined)
+    await loadHandoffSettings($).catch(() => undefined)
+    pauseFailed = false
     const fresh = isFresh(await flowGet($, 'pendingAt'), await $.clock.now())
     const resume = fresh ? ((await flowGet($, 'pendingResume')) as string | undefined) : undefined
+    const after = fresh ? ((await flowGet($, 'pendingMode')) as string | undefined) : undefined
     const previous = fresh ? ((await flowGet($, 'pendingPrevious')) as string | undefined) : undefined
     const held = fresh ? ((await flowGet($, 'pendingPrompt')) as string | undefined) : undefined
     for (const key of FLOW_KEYS) await flowDelete($, key)
@@ -1443,8 +1633,8 @@ export const register: Register = (on, options) => {
     if (previous) await update($, previousAtom, () => previous)
     if (resume) {
       $.clock.after(0, async () => {
-        // "after-clear": /resume does not start step 1, a message follows (skills/resume/scripts/find.sh).
-        await runSkill($, 'resume', threadName(resume) + (held ? ' after-clear' : ''))
+        // "after-clear": a message follows; "auto-clear": only a report (skills/resume/scripts/find.sh).
+        await runSkill($, 'resume', threadName(resume) + (held ? ' after-clear' : after === 'report' ? ' auto-clear' : ''))
         if (held) {
           // A hidden conversation row: the model reads it, the user sees the answers in the pane.
           if (previous) {
@@ -1559,7 +1749,8 @@ export const register: Register = (on, options) => {
     ]
     const eco = (await read($, economyAtom)).active
     if (eco.split) {
-      const text = standard ? splitNoteStandard(standard.agents.split('/').pop() ?? '', e.model) : splitNote(e.model)
+      const base = standard ? splitNoteStandard(standard.agents.split('/').pop() ?? '', e.model) : splitNote(e.model)
+      const text = base + ' ' + largeSplitNote(`${$.plugin.root}/docs/large-split.md`) + RESULT_NOTE.trim() + delegationNote
       extra.push({ id: 'kokpit-split', text, scope: 'session' as const })
     }
     if (eco.effort) extra.push({ id: 'kokpit-effort', text: EFFORT_NOTE, scope: 'session' as const })
@@ -1600,11 +1791,18 @@ export const register: Register = (on, options) => {
       if (!h.running) {
         const now = await $.clock.now()
         pendingTokens = (await read($, usageAtom))?.contextTokens ?? 0
-        await update($, handoffAtom, x => ({ ...x, running: true, startedAt: now, savedPath: null }))
+        await update($, handoffAtom, x => ({ ...x, running: true, startedAt: now, savedPath: null, midWork: false }))
       }
       const r = await next(e)
       const lessons = (await read($, qualityAtom)).lessons ? '' : LESSONS_OFF_NOTE
-      return { text: r.text + handoffLanguageNote(language) + lessons }
+      const auto = (await read($, handoffSettingsAtom)).autoClear ? AUTO_CLEAR_NOTE : ''
+      return { text: r.text + handoffLanguageNote(language) + lessons + auto }
+    }
+    if (name === 'resume') {
+      const r = await next(e)
+      const chosen = /^CHOSEN THREAD: (.+)$/m.exec(r.text)?.[1]?.trim()
+      const record = chosen ? await readPaused($, await pausedFile($, threadName(chosen))) : null
+      return record ? { text: r.text + '\n' + pausedNote(record) } : r
     }
     if (name === 'setup') {
       const r = await next(e)
@@ -1624,7 +1822,8 @@ export const register: Register = (on, options) => {
       const held = await takeInbox($)
       if (held.length > 0) e = { ...e, context: [...(e.context ?? []), inboxText(held)] }
     }
-    if (clearMode !== 'message' || (e.origin.kind !== 'composer' && e.origin.kind !== 'bridge')) return next(e)
+    const autoClear = (await read($, handoffSettingsAtom)).autoClear
+    if ((clearMode !== 'message' && !autoClear) || (e.origin.kind !== 'composer' && e.origin.kind !== 'bridge')) return next(e)
     if (e.command || e.isMeta || (e.attachments && e.attachments.length > 0)) return next(e)
     const h = await read($, handoffAtom)
     if (h.planMode) return next(e)
@@ -1635,7 +1834,12 @@ export const register: Register = (on, options) => {
     }
     // e.turnId: sent during a running turn, which /clear would interrupt.
     if (!h.savedPath || e.turnId) return next(e)
-    if ((await backgroundWork($)).length > 0) return next(e)
+    const busy = await backgroundWork($)
+    if (busy.length > 0 && !(autoClear && !pauseFailed && (await pastCritical($)))) {
+      // The message goes to this conversation; the clear comes after the background results.
+      if (!h.clearWhenIdle) await update($, handoffAtom, x => ({ ...x, clearWhenIdle: true, busy }))
+      return next(e)
+    }
     const path = h.savedPath
     await holdPrompt($, [e.text, ...(e.context ?? [])].join('\n\n'))
     if (h.stale) {
@@ -1689,6 +1893,23 @@ export const register: Register = (on, options) => {
     } catch (err) {
       return { result: 'Not handed over: ' + String(err instanceof Error ? err.message : err) }
     }
+  })
+
+  on('tool.describe', { tool: 'mcp__kokpit__subagent_result' }, async ($, e, next) => ({ ...(await next(e)), isDeferred: false })).catch(
+    ($, e, next) => next(e),
+  )
+
+  on('tool.call', { tool: 'mcp__kokpit__subagent_result' }, async ($, e) => {
+    const entry = entryFrom(e as unknown as Record<string, unknown>, new Date(await $.clock.now()).toISOString())
+    if (typeof entry === 'string') return { result: entry }
+    const before = routes(await readLedger($)).find(r => r.kind === entry.kind)
+    const ledger = addEntry((await read($, delegationAtom)) ?? [], entry)
+    await $.store.set(await ledgerKey($), ledger)
+    await update($, delegationAtom, () => ledger)
+    const now = routes(ledger).find(r => r.kind === entry.kind)
+    const changed = now && (now.floor !== before?.floor || now.tryTier !== before?.tryTier)
+    const lesson = changed ? ledgerNote([now]).replace(/^ What.*?: /, '').replace(/\.$/, '') : ''
+    return { result: lesson ? `Recorded. From now on for this class: ${lesson}.` : 'Recorded.' }
   })
 
   on('tool.call', { tool: 'mcp__kokpit__effort_rating' }, async ($, e) => {
@@ -1783,6 +2004,8 @@ export const register: Register = (on, options) => {
 
   on('tool.call', { tool: /^(Edit|Write|MultiEdit)$/ }, async ($, e, next) => {
     const path = String((e as { file_path?: unknown }).file_path ?? '')
+    const record = e.agentId ? agentRecords.get(e.agentId) : undefined
+    if (record && path && !record.files.includes(path) && record.files.length < 50) record.files.push(path)
     const rel = path ? await projectRelative($, path) : null
     if (!rel) return next(e)
     const checksOn = (await read($, qualityAtom)).checks
@@ -1821,12 +2044,52 @@ export const register: Register = (on, options) => {
   }).catch(($, e, next) => next(e))
 
   on('agent.spawn', async ($, e, next) => {
-    if (e.fork || e.workflow || !(await read($, economyAtom)).active.split) return next(e)
-    const model = subagentModel(e.model, e.subagentType)
-    const r = await next(model === e.model ? e : { ...e, model })
-    if ('agentId' in r && r.agentId) {
+    // A paused agent started again: the marker becomes its original brief, model and folder.
+    const markId = markerId(e.prompt)
+    const paused = markId ? await findPaused($, markId) : null
+    if (markId && !paused) return { deny: `Kokpit: there is no paused agent ${markId} (already started again?).` }
+    let input = e
+    if (paused) {
+      const a = paused.agent
+      // An agent's own worktree may be gone (removed when it was stopped with nothing changed).
+      const cwd = a.cwd && (await attempt(() => $.fs.exists(a.cwd as string), false)) ? a.cwd : undefined
+      input = {
+        ...e,
+        prompt: continuePrompt(a),
+        description: a.description || e.description,
+        subagentType: a.subagentType || e.subagentType,
+        background: true,
+        ...(a.model ? { model: a.model } : {}),
+        ...(cwd ? { cwd } : {}),
+      }
+    }
+    const split = !paused && !e.fork && !e.workflow && (await read($, economyAtom)).active.split
+    if (split) {
+      const model = subagentModel(e.model, e.subagentType)
+      if (model !== e.model) input = { ...input, model }
+    }
+    const r = await next(input)
+    if (!('agentId' in r) || !r.agentId) return r
+    if (split) {
       agentTypes.set(r.agentId, e.subagentType)
       if (agentTypes.size > 200) agentTypes.delete(agentTypes.keys().next().value ?? '')
+    }
+    if (input.background && !input.workflow && !input.isTeammate && !input.resume && !input.parentAgentId) {
+      agentRecords.set(r.agentId, {
+        id: r.agentId,
+        description: input.description,
+        subagentType: input.subagentType,
+        model: r.model || input.model,
+        cwd: input.cwd,
+        prompt: paused ? paused.agent.prompt : input.fork ? null : input.prompt,
+        files: paused ? paused.agent.files : [],
+        fork: input.fork,
+      })
+      if (agentRecords.size > AGENT_RECORDS_MAX) agentRecords.delete(agentRecords.keys().next().value ?? '')
+    }
+    if (paused && markId) {
+      const rest = afterRestart(paused.record, markId)
+      await attempt(() => $.fs.write(paused.file, rest ? JSON.stringify(rest, null, 2) + '\n' : '{}\n'), undefined)
     }
     return r
   }).catch(($, e, next) => next(e))
@@ -2047,6 +2310,8 @@ export const register: Register = (on, options) => {
           color: v.sub ? sign(v.sub.usd) : undefined,
         },
       ]
+      const ledger = (await read($, delegationAtom)) ?? (await readLedger($))
+      const learned = routes(ledger).slice(0, 8)
       if (v.upgrade) {
         sources.push({ cells: ['Your picks', '+' + usd(v.upgrade.usd), 'your pricier subagents (e.g. Fable); not counted'], color: 'yellow' })
       }
@@ -2084,6 +2349,22 @@ export const register: Register = (on, options) => {
           {v.subagents.length
             ? row('st-subl', 'Subagents', v.subagents.slice(0, 6).map(x => `${x.key} ${x.n}`).join(' · '))
             : ''}
+          {learned.length ? gap : ''}
+          {learned.length
+            ? table(
+                'st-del',
+                ['Task class', 'First try', 'Route'],
+                W,
+                learned.map(r => ({
+                  cells: [
+                    r.kind,
+                    `${r.firstTry} of ${r.runs}`,
+                    r.tryTier ? `try ${r.tryTier} (passes in a row)` : r.floor ? `at least ${r.floor} (${r.failed?.tier} lacked capability)` : 'rubric',
+                  ],
+                  color: r.tryTier ? 'green' : r.floor ? 'yellow' : undefined,
+                })),
+              )
+            : ''}
           {v.unknownModels ? row('st-unk', 'Note', `${v.unknownModels} steps on unpriced models (counted as Opus 5.5)`, 'yellow') : ''}
           {help && v.week
             ? row('st-cal', 'Calibration', `${planName} week ≈ ${usd(v.week.usd)} · ${v.week.samples} samples over ${pct(v.week.measured)}`)
@@ -2093,7 +2374,9 @@ export const register: Register = (on, options) => {
               'step at the highest level would think: high 1.2–1.6×, xhigh 1.5–2.5×, max 1.8–3.2× of medium) and ' +
               'subagents (the same tokens on the conversation’s model and effort; Explore against Haiku). Subagents you ' +
               'put on a pricier model than the conversation’s are your picks, shown apart. The week share compares the ' +
-              'measured cost with the rise of the weekly counter; usage on other devices inflates it.',
+              'measured cost with the rise of the weekly counter; usage on other devices inflates it. Task classes come ' +
+              'from the delegation log: a class moves to a stronger model only after a failure on capability, and one ' +
+              'tier cheaper is suggested after 3 first-try passes in a row; the lessons reach Claude in a new conversation.',
           )}
           {gap}
           <Button
@@ -2176,18 +2459,51 @@ export const register: Register = (on, options) => {
     const usage = await read($, usageAtom)
     const log = ((await $.store.get('log')) as HandoffLogEntry[] | undefined) ?? []
     const win = usage?.contextWindow ?? 200_000
-    const threshold = thresholdFor(tokensSetting, win)
+    const hs = await read($, handoffSettingsAtom)
+    const lim = thresholds(hs, handoffConfig, win)
+    const softWanted = hs.soft ?? handoffConfig.soft
+    const criticalWanted = hs.critical ?? (handoffConfig.hard > 0 ? handoffConfig.hard : softWanted + CRITICAL_EXTRA)
+    const pick = (key: string, label: string, choices: number[], current: number, set: (v: number) => unknown) => (
+      <Box key={key} flexDirection="row">
+        <Box width={L}>
+          <Text>{label}</Text>
+        </Box>
+        {choice(
+          key + '-',
+          (choices.includes(current) ? choices : [...choices, current].sort((a, b) => a - b)).map(v => ({ id: String(v), label: k(v) })),
+          String(current),
+          v => set(Number(v)),
+        )}
+      </Box>
+    )
+    const capped = lim.soft !== softWanted || lim.critical !== Math.max(criticalWanted, lim.soft)
     const decisions = await read($, decisionsAtom)
     return (
       <Box flexDirection="column">
         {header}
+        {title('Context')}
+        {toggle(
+          'h-auto',
+          'Clear by itself',
+          hs.autoClear,
+          () => saveHandoffSettings($, x => ({ ...x, autoClear: !x.autoClear })),
+          'after the thread is saved; waits for background work',
+        )}
+        {pick('h-soft', 'Clear threshold', SOFT_CHOICES, softWanted, v => saveHandoffSettings($, x => ({ ...x, soft: v })))}
+        {pick('h-crit', 'Critical threshold', CRITICAL_CHOICES, criticalWanted, v => saveHandoffSettings($, x => ({ ...x, critical: v })))}
+        {capped ? row('h-cap', 'For this model', `${k(lim.soft)} · ${k(lim.critical)} (window ${k(win)})`, 'yellow') : ''}
+        {explain(
+          'Clear threshold: a handoff after a finished task. Critical: a handoff even mid-work; with "Clear by itself" on, ' +
+            'background agents are paused for the clear and started again after the resume (their partial work stays on disk). ' +
+            'At most 75% and 85% of the model\'s window. These apply to all projects.',
+        )}
+        {gap}
         {title('Handoff')}
         {row('h-mode', 'Mode', mode === 'auto' ? 'auto, after the threshold' : mode === 'break' ? 'break, after a finished task' : 'button only')}
-        {row('h-thr', 'Thresholds', `soft ${k(threshold)} · hard ${k(hardThresholdFor(threshold, hardSetting, win))} tokens`)}
-        {row('h-clear', 'Clearing', clearMode === 'message' ? 'on your next message' : 'with the button')}
+        {row('h-clear', 'Clearing', hs.autoClear ? 'by itself' : clearMode === 'message' ? 'on your next message' : 'with the button')}
         {row('h-lang', 'Language', language === 'pl' ? 'Polish' : 'English')}
         {row('h-stats', 'History', stats(log, await $.clock.now()))}
-        {explain('Change these in /plugin → kokpit → Configure, then /reload-plugins. Language applies to new threads, register entries and templates.')}
+        {explain('Mode and language: /plugin → kokpit → Configure, then /reload-plugins. Language applies to new threads, register entries and templates.')}
         {gap}
         {title('Tools')}
         <Box flexDirection="row" columnGap={2} flexWrap="wrap">
@@ -2217,7 +2533,7 @@ export const register: Register = (on, options) => {
 
   // The engine reports commands and other background tasks only on Stop: remember them for /clear decisions.
   on('classic.Stop', async ($, e, next) => {
-    lastBackground = (e.background_tasks ?? []).map(t => ({ type: t.type, description: t.description }))
+    lastBackground = (e.background_tasks ?? []).map(t => ({ id: t.id, type: t.type, description: t.description }))
     return next(e)
   }).catch(($, e, next) => next(e))
 
@@ -2258,7 +2574,7 @@ export const register: Register = (on, options) => {
     await releaseAfterTurn($, wasRunning || (await read($, handoffAtom)).awaiting)
     const h = await read($, handoffAtom)
     if (h.savedPath && e.turnId === h.savedTurnId) {
-      if (h.clearAfter) {
+      if (h.clearAfter || (await read($, handoffSettingsAtom)).autoClear) {
         const path = h.savedPath
         $.clock.after(0, () => clearAndResume($, path))
       }
@@ -2268,7 +2584,10 @@ export const register: Register = (on, options) => {
     if (h.savedPath && !h.stale) await update($, handoffAtom, x => ({ ...x, stale: true }))
     if (h.planMode) return r
     if (h.clearWhenIdle) {
-      if (h.savedPath && (await backgroundWork($)).length === 0) {
+      const idle = (await backgroundWork($)).length === 0
+      const pause = !idle && !pauseFailed && (await read($, handoffSettingsAtom)).autoClear && (await pastCritical($))
+      // The thread is refreshed first: with the results, or with what happened while waiting before a pause.
+      if (h.savedPath && (idle || pause)) {
         await update($, handoffAtom, x => ({ ...x, clearWhenIdle: false }))
         $.clock.after(0, () => refreshThenClear($))
       }
@@ -2283,13 +2602,13 @@ export const register: Register = (on, options) => {
     if (mode === 'button') return r
     const usage = await read($, usageAtom)
     if (!usage) return r
-    const soft = thresholdFor(tokensSetting, usage.contextWindow)
-    const hard = hardThresholdFor(soft, hardSetting, usage.contextWindow)
+    const { soft, critical } = await limitsNow($, usage.contextWindow)
     const now = await read($, handoffAtom)
-    const finished = !now.awaiting && (mode === 'auto' || isFinished(await read($, tasksAtom)))
-    if (!autoDue(usage.contextTokens, soft, hard, now, finished)) return r
+    const listDone = isFinished(await read($, tasksAtom))
+    const finished = !now.awaiting && (mode === 'auto' || listDone)
+    if (!autoDue(usage.contextTokens, soft, critical, now, finished)) return r
     // After the current event: the turn has to close first.
-    $.clock.after(0, () => startHandoff($, mode))
+    $.clock.after(0, () => startHandoff($, mode, !listDone))
     return r
   })
 
@@ -2340,7 +2659,14 @@ export const register: Register = (on, options) => {
 
   on('tool.check', { tool: ['Write', 'Edit'] }, async ($, e, next) => {
     const path = (e.input as { file_path?: unknown } | null)?.file_path
-    if (typeof path === 'string' && isHandoffPath(path, await $.session.root())) return { decision: 'allow' }
+    // The main checkout is asked only for a path into a handoff folder: projectRoot may run git.
+    if (
+      typeof path === 'string' &&
+      (isHandoffPath(path, await $.session.root()) ||
+        (path.includes('/' + HANDOFF_DIR + '/') && isHandoffPath(path, await projectRoot($))))
+    ) {
+      return { decision: 'allow' }
+    }
     return next(e)
   }).catch(($, e, next) => next(e))
 
@@ -2535,8 +2861,8 @@ export const register: Register = (on, options) => {
     const cells = narrow ? 6 : 10
     const ctx = usage.contextPercent
     const tokens = usage.contextTokens
-    const threshold = thresholdFor(tokensSetting, usage.contextWindow)
-    const hard = hardThresholdFor(threshold, hardSetting, usage.contextWindow)
+    const { soft: threshold, critical: hard } = await limitsNow($, usage.contextWindow)
+    const autoClear = (await read($, handoffSettingsAtom)).autoClear
     const previous = await read($, previousAtom)
     const p = progress(tasks)
 
@@ -2651,13 +2977,15 @@ export const register: Register = (on, options) => {
           {handoff.clearWhenIdle ? (
             <Text color="yellow">
               {`⏳ Thread "${threadName(path)}" saved; I will clear after the background results` +
-                (handoff.busy && handoff.busy.length > 0 ? ` (${handoff.busy.slice(0, 3).join(', ')})` : '')}
+                (handoff.busy && handoff.busy.length > 0 ? ` (${handoff.busy.slice(0, 3).join(', ')})` : '') +
+                (autoClear && !pauseFailed ? `, or pause them from ${k(hard)}` : '')}
             </Text>
           ) : handoff.stale ? (
             <Text color="yellow">{`⚠ Thread "${threadName(path)}" saved earlier; the conversation moved on`}</Text>
           ) : (
             <Text color="green">
-              {`✓ Thread "${threadName(path)}" saved` + (clearMode === 'message' ? '; your next message clears and resumes' : '')}
+              {`✓ Thread "${threadName(path)}" saved` +
+                (autoClear ? '; clearing and resuming…' : clearMode === 'message' ? '; your next message clears and resumes' : '')}
             </Text>
           )}
           <Button
@@ -2666,6 +2994,20 @@ export const register: Register = (on, options) => {
             hotkey="1"
             onPress={() => (handoff.stale ? refreshThenClear($) : clearAndResume($, path))}
           />
+          {handoff.clearWhenIdle ? (
+            <Button
+              key="kokpit-pause-clear"
+              label="Pause them and clear"
+              hotkey="2"
+              onPress={() => {
+                pauseNext = true
+                pauseFailed = false
+                return handoff.stale ? refreshThenClear($) : clearAndResume($, path)
+              }}
+            />
+          ) : (
+            ''
+          )}
           {handoff.clearWhenIdle ? (
             <Button key="kokpit-force-clear" label="Clear anyway" plain onPress={() => clearAndResume($, path, true)} />
           ) : (
@@ -2686,7 +3028,7 @@ export const register: Register = (on, options) => {
     } else if (isDue(tokens, threshold, handoff)) {
       const when =
         tokens !== null && tokens >= hard
-          ? 'after this turn (hard threshold)'
+          ? 'after this turn (critical threshold)'
           : handoff.awaiting
             ? 'after your answer' + (mode === 'break' ? ' and a finished task' : '')
             : mode === 'auto'

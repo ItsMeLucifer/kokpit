@@ -1,7 +1,7 @@
 ---
 status: org-rules
 version: 2
-core: 0.12.0
+core: 0.13.0
 owner: Owner (defined in 10-project.md)
 ---
 
