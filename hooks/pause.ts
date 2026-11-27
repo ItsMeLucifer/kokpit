@@ -1,11 +1,12 @@
-import type { HandoffSettings, PausedAgent, PausedRecord } from '../types'
+import type { Automation, HandoffSettings, PausedAgent, PausedRecord } from '../types'
 
 /** Paused background agents per thread, `<thread>.json`, in the main checkout. */
 export const PAUSED_DIR = '.claude/kokpit/paused'
 /** The prompt the model passes to restart a paused agent; Kokpit swaps it for the original brief. */
 export const RESUME_MARK = 'kokpit-resume:'
 
-export const HANDOFF_SETTINGS_0: HandoffSettings = { autoClear: false, soft: null, critical: null }
+export const HANDOFF_SETTINGS_0: HandoffSettings = { level: null, soft: null, critical: null }
+export const LEVELS: Automation[] = ['manual', 'assisted', 'automatic']
 export const SOFT_CHOICES = [150_000, 200_000, 300_000, 400_000]
 export const CRITICAL_CHOICES = [400_000, 500_000, 600_000, 700_000]
 
@@ -20,7 +21,28 @@ const positive = (v: unknown): number | null => (typeof v === 'number' && Number
 
 export function parseHandoffSettings(raw: unknown): HandoffSettings {
   const r = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {}
-  return { autoClear: r.autoClear === true, soft: positive(r.soft), critical: positive(r.critical) }
+  // 0.15–0.16 stored a switch `autoClear`.
+  const level = LEVELS.includes(r.level as Automation) ? (r.level as Automation) : r.autoClear === true ? 'automatic' : null
+  return { level, soft: positive(r.soft), critical: positive(r.critical) }
+}
+
+export type Flow = {
+  level: Automation
+  /** When a handoff starts by itself: never, after a finished task, or (plugin setting only) the first quiet turn. */
+  mode: 'button' | 'break' | 'auto'
+  /** After the save: your next message clears, or only the button. */
+  clearMode: 'message' | 'button'
+  /** Clears and resumes without a message, and pauses background agents past the critical threshold. */
+  autoClear: boolean
+}
+
+/** What the chosen level means; without a choice, the plugin settings decide. */
+export function flowOf(level: Automation | null, config: { mode: Flow['mode']; clearMode: Flow['clearMode'] }): Flow {
+  if (level === 'manual') return { level, mode: 'button', clearMode: 'button', autoClear: false }
+  if (level === 'assisted') return { level, mode: 'break', clearMode: 'message', autoClear: false }
+  if (level === 'automatic') return { level, mode: 'break', clearMode: 'message', autoClear: true }
+  const guess: Automation = config.mode === 'button' ? 'manual' : 'assisted'
+  return { level: guess, mode: config.mode, clearMode: config.clearMode, autoClear: false }
 }
 
 /** Clear threshold: the setting, but never beyond 75% of the model's window. */

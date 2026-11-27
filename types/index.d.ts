@@ -161,9 +161,16 @@ export type LedgerEntry = {
   cause?: 'model' | 'brief' | 'context' | 'environment' | 'flaky'
 }
 
+/**
+ * How much Kokpit does on its own: manual = it only suggests (buttons); assisted = a handoff by itself after a
+ * finished task, your next message clears; automatic = it also clears and resumes by itself and pauses background
+ * agents past the critical threshold.
+ */
+export type Automation = 'manual' | 'assisted' | 'automatic'
+
 export type HandoffSettings = {
-  /** Clear and resume by itself once the thread is saved and nothing runs in the background. */
-  autoClear: boolean
+  /** Chosen in /kokpit; null = from the plugin settings (handoffMode, handoffClear). */
+  level: Automation | null
   /** Context tokens from which a handoff comes after a finished task; null = plugin setting. */
   soft: number | null
   /** From here a handoff comes mid-work and background agents are paused for the clear; null = plugin setting. */

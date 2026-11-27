@@ -8,6 +8,7 @@ import type {
   Handoff,
   HandoffLogEntry,
   HandoffSettings,
+  Automation,
   PausedAgent,
   PausedRecord,
   InboxItem,
@@ -43,10 +44,13 @@ import {
   routes,
 } from './delegation'
 import type { LedgerEntry } from './delegation'
+import type { Flow } from './pause'
 import {
   CRITICAL_CHOICES,
   CRITICAL_EXTRA,
   HANDOFF_SETTINGS_0,
+  LEVELS,
+  flowOf,
   SOFT_CHOICES,
   PAUSED_DIR,
   afterRestart,
@@ -441,6 +445,13 @@ export function toUsage(u: {
 }
 
 export { thresholdFor, hardThresholdFor }
+
+const LEVEL_NAME: Record<Automation, string> = { manual: 'Manual', assisted: 'Assisted', automatic: 'Automatic' }
+const LEVEL_NOTE: Record<Automation, string> = {
+  manual: 'Kokpit only suggests: handoff and clear are buttons in the band.',
+  assisted: 'A handoff by itself after a finished task; your next message clears and resumes.',
+  automatic: 'Handoff, clear and resume by itself; waits for background work, pauses it past the critical threshold.',
+}
 
 /** Whether the band offers a handoff: threshold passed, not snoozed, not right after the previous one. */
 export function isDue(tokens: number | null, threshold: number, h: Handoff): boolean {
@@ -1053,7 +1064,12 @@ async function saveAnswers($: EngineInterface, threadPath: string): Promise<void
 // ── Clearing: settings, thresholds, pausing background agents ──
 
 /** Plugin settings for handoffs (set in register); the panel's choices override them. */
-let handoffConfig: { soft: number; hard: number; clearMode: ClearMode } = { soft: 150_000, hard: 0, clearMode: 'message' }
+let handoffConfig: { soft: number; hard: number; mode: Mode; clearMode: ClearMode } = {
+  soft: 150_000,
+  hard: 0,
+  mode: 'break',
+  clearMode: 'message',
+}
 const HANDOFF_SETTINGS_KEY = 'handoff-settings'
 /** Briefs of the background agents this window started, for a pause before a clear (the module outlives /clear). */
 const agentRecords = new Map<string, PausedAgent>()
@@ -1072,6 +1088,11 @@ async function saveHandoffSettings($: EngineInterface, change: (s: HandoffSettin
   const next = change(await read($, handoffSettingsAtom))
   await $.store.set(HANDOFF_SETTINGS_KEY, next)
   await update($, handoffSettingsAtom, () => next)
+}
+
+/** The level chosen in /kokpit (or the plugin settings) as modes. */
+async function flowNow($: EngineInterface): Promise<Flow> {
+  return flowOf((await read($, handoffSettingsAtom)).level, handoffConfig)
 }
 
 async function limitsNow($: EngineInterface, window: number): Promise<{ soft: number; critical: number }> {
@@ -1168,7 +1189,7 @@ async function pauseAndClear($: EngineInterface, path: string): Promise<void> {
 async function clearAndResume($: EngineInterface, path: string, force = false): Promise<void> {
   // Background results go only to this conversation, which /clear ends: wait for them unless forced or paused.
   const busy = force ? [] : await backgroundWork($)
-  if (busy.length > 0 && (pauseNext || (!pauseFailed && (await read($, handoffSettingsAtom)).autoClear && (await pastCritical($))))) {
+  if (busy.length > 0 && (pauseNext || (!pauseFailed && (await flowNow($)).autoClear && (await pastCritical($))))) {
     await pauseAndClear($, path)
     return
   }
@@ -1184,7 +1205,7 @@ async function clearAndResume($: EngineInterface, path: string, force = false): 
   if (held.length > 0) await holdPrompt($, inboxText(held))
   await saveAnswers($, path)
   // By itself: only a report after a finished piece of work, the work goes on when it was cut mid-way.
-  if ((await read($, handoffSettingsAtom)).autoClear) await flowSet($, 'pendingMode', h.midWork ? 'continue' : 'report')
+  if ((await flowNow($)).autoClear) await flowSet($, 'pendingMode', h.midWork ? 'continue' : 'report')
   await flowSet($, 'pendingResume', await inHome($, path))
   try {
     await $.command.run({ command: 'clear', args: '' })
@@ -1549,13 +1570,12 @@ async function decisionsPath($: EngineInterface, setting: string, lang: Language
 }
 
 export const register: Register = (on, options) => {
-  const mode = parseMode(options?.handoffMode)
+  const configMode = parseMode(options?.handoffMode)
   const tokensSetting =
     typeof options?.handoffTokens === 'number' && options.handoffTokens > 0 ? options.handoffTokens : 150_000
   const hardSetting =
     typeof options?.handoffHardTokens === 'number' && options.handoffHardTokens > 0 ? options.handoffHardTokens : 0
-  const clearMode = parseClearMode(options?.handoffClear)
-  handoffConfig = { soft: tokensSetting, hard: hardSetting, clearMode }
+  handoffConfig = { soft: tokensSetting, hard: hardSetting, mode: configMode, clearMode: parseClearMode(options?.handoffClear) }
   const nudge = options?.taskNudge !== false
   const language = parseLanguage(options?.language)
   const decisionsSetting = typeof options?.decisionsFile === 'string' ? options.decisionsFile.trim() : ''
@@ -1795,7 +1815,7 @@ export const register: Register = (on, options) => {
       }
       const r = await next(e)
       const lessons = (await read($, qualityAtom)).lessons ? '' : LESSONS_OFF_NOTE
-      const auto = (await read($, handoffSettingsAtom)).autoClear ? AUTO_CLEAR_NOTE : ''
+      const auto = (await flowNow($)).autoClear ? AUTO_CLEAR_NOTE : ''
       return { text: r.text + handoffLanguageNote(language) + lessons + auto }
     }
     if (name === 'resume') {
@@ -1822,7 +1842,7 @@ export const register: Register = (on, options) => {
       const held = await takeInbox($)
       if (held.length > 0) e = { ...e, context: [...(e.context ?? []), inboxText(held)] }
     }
-    const autoClear = (await read($, handoffSettingsAtom)).autoClear
+    const { autoClear, clearMode } = await flowNow($)
     if ((clearMode !== 'message' && !autoClear) || (e.origin.kind !== 'composer' && e.origin.kind !== 'bridge')) return next(e)
     if (e.command || e.isMeta || (e.attachments && e.attachments.length > 0)) return next(e)
     const h = await read($, handoffAtom)
@@ -2499,6 +2519,7 @@ export const register: Register = (on, options) => {
         </Box>
       </Box>
     )
+    const flow = flowOf(hs.level, handoffConfig)
     const softDefault = handoffConfig.soft
     const criticalDefault = handoffConfig.hard > 0 ? handoffConfig.hard : softWanted + CRITICAL_EXTRA
     const capped = lim.soft !== softWanted || lim.critical !== Math.max(criticalWanted, lim.soft)
@@ -2507,34 +2528,47 @@ export const register: Register = (on, options) => {
       <Box flexDirection="column">
         {header}
         {title('Context')}
-        {toggle(
-          'h-auto',
-          'Clear by itself',
-          hs.autoClear,
-          () => saveHandoffSettings($, x => ({ ...x, autoClear: !x.autoClear })),
-          'after the thread is saved; waits for background work',
-        )}
+        <Box key="h-level" flexDirection="row">
+          <Box width={L} flexShrink={0}>
+            <Text>Management</Text>
+          </Box>
+          {choice('h-level-', LEVELS.map(l => ({ id: l, label: LEVEL_NAME[l] })), flow.level, l =>
+            saveHandoffSettings($, x => ({ ...x, level: l })),
+          )}
+        </Box>
+        <Box flexDirection="row">
+          <Box width={L} flexShrink={0} />
+          <Text dimColor wrap="wrap">
+            {LEVEL_NOTE[flow.level]}
+          </Text>
+        </Box>
         {pick(
           'h-soft',
           'Clear threshold',
           SOFT_CHOICES,
           hs.soft,
           softDefault,
-          'from here: a handoff once the current task is finished, then the clear',
+          flow.level === 'manual'
+            ? 'from here the band suggests a handoff'
+            : flow.autoClear
+              ? 'from here: a handoff once the current task is finished, then the clear and the resume'
+              : 'from here: a handoff once the current task is finished; your next message clears',
           v => saveHandoffSettings($, x => ({ ...x, soft: v })),
         )}
-        {pick(
-          'h-crit',
-          'Critical threshold',
-          CRITICAL_CHOICES,
-          hs.critical,
-          criticalDefault,
-          hs.autoClear
-            ? 'from here: a handoff even mid-task; background agents are paused, then restarted after the clear'
-            : 'from here: a handoff even mid-task, without waiting for it to finish',
-          v => saveHandoffSettings($, x => ({ ...x, critical: v })),
-        )}
-        {criticalWanted <= softWanted
+        {flow.level === 'manual'
+          ? ''
+          : pick(
+              'h-crit',
+              'Critical threshold',
+              CRITICAL_CHOICES,
+              hs.critical,
+              criticalDefault,
+              flow.autoClear
+                ? 'from here: a handoff even mid-task; background agents are paused, then restarted after the clear'
+                : 'from here: a handoff even mid-task; the clear still waits for background agents',
+              v => saveHandoffSettings($, x => ({ ...x, critical: v })),
+            )}
+        {flow.level !== 'manual' && criticalWanted <= softWanted
           ? row('h-order', 'Note', `critical is not above the clear threshold, so both act at ${k(lim.soft)}`, 'yellow')
           : ''}
         {capped ? row('h-cap', 'For this model', `${k(lim.soft)} · ${k(lim.critical)} (window ${k(win)})`, 'yellow') : ''}
@@ -2544,11 +2578,9 @@ export const register: Register = (on, options) => {
         )}
         {gap}
         {title('Handoff')}
-        {row('h-mode', 'Mode', mode === 'auto' ? 'auto, after the threshold' : mode === 'break' ? 'break, after a finished task' : 'button only')}
-        {row('h-clear', 'Clearing', hs.autoClear ? 'by itself' : clearMode === 'message' ? 'on your next message' : 'with the button')}
         {row('h-lang', 'Language', language === 'pl' ? 'Polish' : 'English')}
         {row('h-stats', 'History', stats(log, await $.clock.now()))}
-        {explain('Mode and language: /plugin → kokpit → Configure, then /reload-plugins. Language applies to new threads, register entries and templates.')}
+        {explain('Language: /plugin → kokpit → Configure, then /reload-plugins; it applies to new threads, register entries and templates.')}
         {gap}
         {title('Tools')}
         <Box flexDirection="row" columnGap={2} flexWrap="wrap">
@@ -2619,7 +2651,7 @@ export const register: Register = (on, options) => {
     await releaseAfterTurn($, wasRunning || (await read($, handoffAtom)).awaiting)
     const h = await read($, handoffAtom)
     if (h.savedPath && e.turnId === h.savedTurnId) {
-      if (h.clearAfter || (await read($, handoffSettingsAtom)).autoClear) {
+      if (h.clearAfter || (await flowNow($)).autoClear) {
         const path = h.savedPath
         $.clock.after(0, () => clearAndResume($, path))
       }
@@ -2630,7 +2662,7 @@ export const register: Register = (on, options) => {
     if (h.planMode) return r
     if (h.clearWhenIdle) {
       const idle = (await backgroundWork($)).length === 0
-      const pause = !idle && !pauseFailed && (await read($, handoffSettingsAtom)).autoClear && (await pastCritical($))
+      const pause = !idle && !pauseFailed && (await flowNow($)).autoClear && (await pastCritical($))
       // The thread is refreshed first: with the results, or with what happened while waiting before a pause.
       if (h.savedPath && (idle || pause)) {
         await update($, handoffAtom, x => ({ ...x, clearWhenIdle: false }))
@@ -2644,6 +2676,7 @@ export const register: Register = (on, options) => {
       $.clock.after(0, () => startHandoff($, 'button'))
       return r
     }
+    const { mode } = await flowNow($)
     if (mode === 'button') return r
     const usage = await read($, usageAtom)
     if (!usage) return r
@@ -2907,7 +2940,7 @@ export const register: Register = (on, options) => {
     const ctx = usage.contextPercent
     const tokens = usage.contextTokens
     const { soft: threshold, critical: hard } = await limitsNow($, usage.contextWindow)
-    const autoClear = (await read($, handoffSettingsAtom)).autoClear
+    const { autoClear, clearMode, mode } = await flowNow($)
     const previous = await read($, previousAtom)
     const p = progress(tasks)
 

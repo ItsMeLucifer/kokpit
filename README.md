@@ -33,13 +33,15 @@ Context fill, the 5-hour and weekly limits (with reset times) and progress of th
 
 ### Handoff instead of `/compact`
 
-**When.** Two token thresholds, chosen in `/kokpit` → Handoff & tools (for all projects) or in the plugin settings. The **clear threshold** (150k by default, never later than 75% of the window) starts a handoff by itself, but only after a finished task. The **critical threshold** (clear + 100k by default, never beyond 85%) starts it at the end of the next turn even mid-work. Modes:
+**How much Kokpit does by itself.** One choice in `/kokpit` → Handoff & tools, for all projects:
 
-| Mode | After the threshold |
+| Level | What happens |
 | --- | --- |
-| `break` (default) | a handoff starts at the end of a turn when the task is finished: the whole list checked off and the turn does not end with a question; from the critical threshold, at the end of the next turn |
-| `button` | only a **Handoff** button in the band |
-| `auto` | a handoff starts at the end of the first turn after the threshold that does not end with a question |
+| **Manual** | Kokpit only suggests: from the clear threshold the band offers a **Handoff** button, and clearing is a button too |
+| **Assisted** (default) | from the clear threshold a handoff starts by itself once the task is finished (the whole list checked off, the turn not ending with a question); from the critical threshold, at the end of the next turn even mid-work; your next message clears and resumes |
+| **Automatic** | as Assisted, but Kokpit also clears and resumes by itself, waits for background work, and pauses it past the critical threshold (below) |
+
+**When.** Two token thresholds, chosen next to the level: the **clear threshold** (150k by default, never later than 75% of the window) and the **critical threshold** (clear + 100k by default, never beyond 85%). Until you pick a level, the plugin settings `handoffMode` and `handoffClear` decide (they also offer `auto`: a handoff at the end of the first turn after the threshold that does not end with a question).
 
 At most one automatic handoff per conversation, so background work that fills the context does not trigger more. **Now** and **Later** (snoozes by 30k tokens) are always available.
 
@@ -53,7 +55,7 @@ At most one automatic handoff per conversation, so background work that fills th
 
 **What happens next, without clicking.** After the save nothing is cleared: you can read the last answers. When you write something, Kokpit holds the message, runs `/clear`, starts `/resume` for the thread in the new session and sends your message there, together with the last two answers as hidden context, so "yes" or "do point 2" still lands. Commands, messages with images and messages while background work runs pass through normally. If the conversation moved on after the save, Kokpit first refreshes the thread and only then clears. In plan mode the handoff waits until plan mode ends. While agents, Kokpit jobs or background commands of the session still run, clearing waits for their results (your message goes to this conversation), then refreshes the thread with them and clears.
 
-**Clearing by itself.** With **Clear by itself** on in `/kokpit` → Handoff & tools, nothing waits for a message: once the thread is saved and nothing runs in the background, Kokpit clears and resumes. After a finished piece of work the new session only reports and waits for you; after a handoff cut mid-work it carries on. Past the **critical threshold** Kokpit stops waiting for background agents: it stops them, keeps each agent's brief and the files it changed in `.claude/kokpit/paused/<thread>.json`, clears, resumes, and the new session starts them again in the background with the original brief and a note to continue from their draft (Kokpit swaps a short marker for the brief, so this costs no tokens). Background commands that were stopped are listed for a re-run. The band also offers **Pause them and clear** while it waits.
+**Clearing by itself.** On the **Automatic** level nothing waits for a message: once the thread is saved and nothing runs in the background, Kokpit clears and resumes. After a finished piece of work the new session only reports and waits for you; after a handoff cut mid-work it carries on. Past the **critical threshold** Kokpit stops waiting for background agents: it stops them, keeps each agent's brief and the files it changed in `.claude/kokpit/paused/<thread>.json`, clears, resumes, and the new session starts them again in the background with the original brief and a note to continue from their draft (Kokpit swaps a short marker for the brief, so this costs no tokens). Background commands that were stopped are listed for a re-run. The band also offers **Pause them and clear** while it waits.
 
 **Lessons.** A handoff also looks for a procedure the user keeps asking for from scratch, a skill they corrected, or a mistake they had to point out twice, and adds at most three proposals to the decision register: a new skill, a change to a named skill, or a check (a linter rule or a `checks` pattern), in that order of preference: a check before a skill, a skill before a sentence. You accept or reject them in `/decisions`; nothing is written during the handoff.
 
@@ -175,10 +177,10 @@ Check in a session: `/plugin` shows `1 mod active · kokpit`. In each repo add `
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `handoffMode` | `break` | `break`, `button` or `auto` (see Handoff) |
+| `handoffMode` | `break` | `break`, `button` or `auto`; used until you pick a level in `/kokpit` |
 | `handoffTokens` | 150000 | the clear threshold in context tokens (never later than 75% of the window); `/kokpit` overrides it |
 | `handoffHardTokens` | 0 | the critical threshold; 0 = clear + 100,000 (never beyond 85%); `/kokpit` overrides it |
-| `handoffClear` | `message` | `message`: your next message after a save clears and resumes; `button`: only "Clear and resume"; **Clear by itself** in `/kokpit` makes it automatic |
+| `handoffClear` | `message` | `message`: your next message after a save clears and resumes; `button`: only "Clear and resume"; used until you pick a level in `/kokpit` |
 | `taskNudge` | true | ask Claude to keep a task list so the band can show progress |
 | `decisionsFile` | empty | the decision register; empty = `docs/decisions.md` (or an existing `docs/decyzje.md`) |
 | `language` | `en` | language of new handoff threads, register entries and repo-standard templates (`en` or `pl`); existing files keep theirs, the interface is English |

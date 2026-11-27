@@ -1227,16 +1227,23 @@ test('with language pl new threads, the register and templates are Polish', { op
 
 // ── Clearing by itself, the critical threshold and paused agents ──
 
-import { CRITICAL_EXTRA, afterRestart, continuePrompt, markerId, parseHandoffSettings, pausedNote, thresholds } from '../hooks/pause'
+import { CRITICAL_EXTRA, afterRestart, continuePrompt, flowOf, markerId, parseHandoffSettings, pausedNote, thresholds } from '../hooks/pause'
 
-test('handoff settings: off and unset by default, the panel overrides the plugin setting, both capped by the window', () => {
-  expect(parseHandoffSettings(undefined)).toEqual({ autoClear: false, soft: null, critical: null })
-  expect(parseHandoffSettings({ autoClear: true, soft: 300_000, critical: -1 })).toEqual({ autoClear: true, soft: 300_000, critical: null })
+test('handoff settings: one level, unset by default, the old switch carries over, thresholds capped by the window', () => {
+  expect(parseHandoffSettings(undefined)).toEqual({ level: null, soft: null, critical: null })
+  expect(parseHandoffSettings({ autoClear: true, soft: 300_000, critical: -1 })).toEqual({ level: 'automatic', soft: 300_000, critical: null })
+  expect(parseHandoffSettings({ level: 'manual', autoClear: true })).toMatchObject({ level: 'manual' })
   const config = { soft: 150_000, hard: 0 }
-  expect(thresholds({ autoClear: true, soft: 300_000, critical: 500_000 }, config, 1_000_000)).toEqual({ soft: 300_000, critical: 500_000 })
-  expect(thresholds({ autoClear: true, soft: null, critical: null }, config, 1_000_000)).toEqual({ soft: 150_000, critical: 150_000 + CRITICAL_EXTRA })
+  expect(thresholds({ level: 'automatic', soft: 300_000, critical: 500_000 }, config, 1_000_000)).toEqual({ soft: 300_000, critical: 500_000 })
+  expect(thresholds({ level: null, soft: null, critical: null }, config, 1_000_000)).toEqual({ soft: 150_000, critical: 150_000 + CRITICAL_EXTRA })
   // a 200k window: 75% and 85% of it
-  expect(thresholds({ autoClear: true, soft: 300_000, critical: 500_000 }, config, 200_000)).toEqual({ soft: 150_000, critical: 170_000 })
+  expect(thresholds({ level: null, soft: 300_000, critical: 500_000 }, config, 200_000)).toEqual({ soft: 150_000, critical: 170_000 })
+  // levels as modes; no choice = the plugin settings
+  const plugin = { mode: 'auto' as const, clearMode: 'button' as const }
+  expect(flowOf('manual', plugin)).toEqual({ level: 'manual', mode: 'button', clearMode: 'button', autoClear: false })
+  expect(flowOf('assisted', plugin)).toEqual({ level: 'assisted', mode: 'break', clearMode: 'message', autoClear: false })
+  expect(flowOf('automatic', plugin)).toEqual({ level: 'automatic', mode: 'break', clearMode: 'message', autoClear: true })
+  expect(flowOf(null, plugin)).toEqual({ level: 'assisted', mode: 'auto', clearMode: 'button', autoClear: false })
 })
 
 test('paused agents: the marker, the brief with a note to continue, the note for /resume', () => {
@@ -1286,7 +1293,7 @@ test('clear by itself: after a handoff of finished work the conversation clears,
 
 test('clear by itself: below the critical threshold a running agent is waited for, past it it is paused and restarted', async ($, on) => {
   const ran: Ran = []
-  const mem: Record<string, unknown> = { 'handoff-settings': { autoClear: true, soft: null, critical: null } }
+  const mem: Record<string, unknown> = { 'handoff-settings': { level: 'automatic', soft: null, critical: null } }
   let agents = [{ id: 'a1', description: 'model ifryt', type: 'general-purpose', status: 'running' }]
   const stopped: string[] = []
   on('tool.call', { tool: 'TaskStop' }, async (_$, e) => {
@@ -1384,4 +1391,23 @@ test('threads live in the main checkout: a session in a worktree reads and saves
   expect(listed).toContain('/p/.claude/handoffs')
   const write = await $.tool.check({ tool: 'Write', input: { file_path: '/p/.claude/handoffs/new.md' } } as never)
   expect(write).toMatchObject({ decision: 'allow' })
+})
+
+test('management level from /kokpit wins over the plugin setting: Manual starts nothing by itself, even past the critical threshold', async ($, on) => {
+  const ran: Ran = []
+  const mem: Record<string, unknown> = { 'handoff-settings': { level: 'manual', soft: null, critical: null } }
+  const clock = engine(on, ran, mem)
+  on('session.start', async () => ({ cwd: '/p' }) as never)
+  on('session.usage', async () => ({ value: measure(175_000) as never }))
+  await $.session.start({ cwd: '/p' } as never)
+  await $.session.measure(measure(175_000))
+  await turn($, 't1', 'Done.')
+  await clock.settle()
+  expect(ran).toHaveLength(0)
+  // the same session switched to Assisted: past the critical threshold a handoff starts
+  mem['handoff-settings'] = { level: 'assisted', soft: null, critical: null }
+  await $.session.start({ cwd: '/p' } as never)
+  await turn($, 't2', 'Done.')
+  await clock.settle()
+  expect(ran.map(r => r.command)).toEqual(['kokpit:handoff'])
 })
