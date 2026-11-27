@@ -2110,7 +2110,7 @@ export const register: Register = (on, options) => {
     const explain = (text: string) => (help ? <Text dimColor wrap="wrap">{text}</Text> : '')
     const row = (key: string, label: string, value: string, color?: string) => (
       <Box key={key} flexDirection="row">
-        <Box width={L}>
+        <Box width={L} flexShrink={0}>
           <Text dimColor>{label}</Text>
         </Box>
         <Text color={color} wrap="wrap">
@@ -2131,7 +2131,7 @@ export const register: Register = (on, options) => {
     )
     const toggle = (key: string, label: string, enabled: boolean, flip: () => unknown, note = '') => (
       <Box flexDirection="row" columnGap={2}>
-        <Box width={L}>
+        <Box width={L} flexShrink={0}>
           <Text>{label}</Text>
         </Box>
         {enabled ? (
@@ -2463,19 +2463,44 @@ export const register: Register = (on, options) => {
     const lim = thresholds(hs, handoffConfig, win)
     const softWanted = hs.soft ?? handoffConfig.soft
     const criticalWanted = hs.critical ?? (handoffConfig.hard > 0 ? handoffConfig.hard : softWanted + CRITICAL_EXTRA)
-    const pick = (key: string, label: string, choices: number[], current: number, set: (v: number) => unknown) => (
-      <Box key={key} flexDirection="row">
-        <Box width={L}>
-          <Text>{label}</Text>
+    // "default" stays a button of its own, so picking a number never makes the default value disappear.
+    const pick = (
+      key: string,
+      label: string,
+      choices: number[],
+      stored: number | null,
+      fallback: number,
+      note: string,
+      set: (v: number | null) => unknown,
+    ) => (
+      <Box key={key} flexDirection="column">
+        <Box flexDirection="row">
+          <Box width={L} flexShrink={0}>
+            <Text>{label}</Text>
+          </Box>
+          {choice(
+            key + '-',
+            [
+              { id: 'default', label: `default ${k(fallback)}` },
+              ...[...new Set([...choices.filter(v => v !== fallback), ...(stored === null ? [] : [stored])])].sort((a, b) => a - b).map(v => ({
+                id: String(v),
+                label: k(v),
+              })),
+            ],
+            stored === null ? 'default' : String(stored),
+            v => set(v === 'default' ? null : Number(v)),
+          )}
         </Box>
-        {choice(
-          key + '-',
-          (choices.includes(current) ? choices : [...choices, current].sort((a, b) => a - b)).map(v => ({ id: String(v), label: k(v) })),
-          String(current),
-          v => set(Number(v)),
-        )}
+        <Box flexDirection="row">
+          <Box width={L} flexShrink={0} />
+          <Text dimColor wrap="wrap">
+            {note}
+          </Text>
+        </Box>
       </Box>
     )
+    const softDefault = handoffConfig.soft
+    const criticalDefault = handoffConfig.hard > 0 ? handoffConfig.hard : softWanted + CRITICAL_EXTRA
     const capped = lim.soft !== softWanted || lim.critical !== Math.max(criticalWanted, lim.soft)
     const decisions = await read($, decisionsAtom)
     return (
@@ -2489,13 +2514,33 @@ export const register: Register = (on, options) => {
           () => saveHandoffSettings($, x => ({ ...x, autoClear: !x.autoClear })),
           'after the thread is saved; waits for background work',
         )}
-        {pick('h-soft', 'Clear threshold', SOFT_CHOICES, softWanted, v => saveHandoffSettings($, x => ({ ...x, soft: v })))}
-        {pick('h-crit', 'Critical threshold', CRITICAL_CHOICES, criticalWanted, v => saveHandoffSettings($, x => ({ ...x, critical: v })))}
+        {pick(
+          'h-soft',
+          'Clear threshold',
+          SOFT_CHOICES,
+          hs.soft,
+          softDefault,
+          'from here: a handoff once the current task is finished, then the clear',
+          v => saveHandoffSettings($, x => ({ ...x, soft: v })),
+        )}
+        {pick(
+          'h-crit',
+          'Critical threshold',
+          CRITICAL_CHOICES,
+          hs.critical,
+          criticalDefault,
+          hs.autoClear
+            ? 'from here: a handoff even mid-task; background agents are paused, then restarted after the clear'
+            : 'from here: a handoff even mid-task, without waiting for it to finish',
+          v => saveHandoffSettings($, x => ({ ...x, critical: v })),
+        )}
+        {criticalWanted <= softWanted
+          ? row('h-order', 'Note', `critical is not above the clear threshold, so both act at ${k(lim.soft)}`, 'yellow')
+          : ''}
         {capped ? row('h-cap', 'For this model', `${k(lim.soft)} · ${k(lim.critical)} (window ${k(win)})`, 'yellow') : ''}
         {explain(
-          'Clear threshold: a handoff after a finished task. Critical: a handoff even mid-work; with "Clear by itself" on, ' +
-            'background agents are paused for the clear and started again after the resume (their partial work stays on disk). ' +
-            'At most 75% and 85% of the model\'s window. These apply to all projects.',
+          '"default" follows the plugin settings (critical: clear + 100k). Both stop at 75% and 85% of the model\'s ' +
+            'window. Paused agents keep their partial work on disk and continue from it. These apply to all projects.',
         )}
         {gap}
         {title('Handoff')}

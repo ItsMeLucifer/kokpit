@@ -445,6 +445,12 @@ test('in a session: steps with usage count savings, weekly readings calibrate, t
   expect(after).toContain('● 300k')
   expect(after).toContain('● 500k')
   expect(after).toContain('by itself')
+  // "default" stays a button after a number is picked, and takes the setting back
+  expect(after).toContain('default 400k')
+  expect(after).toContain('restarted after the clear')
+  await pane.press({ key: 'h-crit-default' })
+  expect(mem['handoff-settings']).toEqual({ autoClear: true, soft: 300_000, critical: null })
+  expect(JSON.stringify(await pane.drawn())).toContain('● default 400k')
 })
 
 test('subagents above the conversation\'s model (Fable under Opus) are kept apart from the savings; the pane names the version', async ($, on) => {
