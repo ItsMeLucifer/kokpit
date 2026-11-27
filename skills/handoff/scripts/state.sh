@@ -3,22 +3,31 @@
 # not fail on a project without git or without a handoff directory.
 SESSION="${1:-unknown}"
 PROJECT="${2:-$PWD}"
-DIR="$PROJECT/.claude/handoffs"
-cd "$PROJECT" 2>/dev/null || true
+# The current checkout first: `.claude/handoffs/` is usually gitignored, so a worktree session keeps its
+# own copy, which CLAUDE_PROJECT_DIR (the main checkout) does not see (resume/scripts/find.sh does the same).
+HERE="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+[ -z "$HERE" ] && HERE="$PROJECT"
+DIR="$HERE/.claude/handoffs"
+OTHER_DIR=""
+[ "$(cd "$PROJECT/.claude/handoffs" 2>/dev/null && pwd -P)" != "$(cd "$DIR" 2>/dev/null && pwd -P)" ] && [ -d "$PROJECT/.claude/handoffs" ] && OTHER_DIR="$PROJECT/.claude/handoffs"
+cd "$HERE" 2>/dev/null || true
 
 echo "date: $(date '+%Y-%m-%d %H:%M %Z')"
 echo "project: $PROJECT"
+[ "$HERE" != "$PROJECT" ] && echo "current checkout: $HERE (handoffs: $DIR)"
 echo "session: $SESSION"
 
 is_thread() { case "$1" in *.archive.md|*.archiwum.md) return 1 ;; *.md) return 0 ;; *) return 1 ;; esac; }
 
 # This session's thread = the file whose `sessions:` frontmatter lists this session.
 THREAD=""
-if [ -d "$DIR" ]; then
-  for f in $(grep -l -m1 "^sessions:.*$SESSION" "$DIR"/*.md 2>/dev/null); do
+for d in "$DIR" $OTHER_DIR; do
+  [ -d "$d" ] && [ -z "$THREAD" ] || continue
+  for f in $(grep -l -m1 "^sessions:.*$SESSION" "$d"/*.md 2>/dev/null); do
     if is_thread "$f"; then THREAD="$f"; break; fi
   done
-fi
+done
+[ -n "$THREAD" ] && DIR="$(dirname "$THREAD")"
 if [ -n "$THREAD" ]; then
   echo "THREAD OF THIS SESSION: $THREAD"
   mkdir -p "$DIR/.previous" 2>/dev/null
